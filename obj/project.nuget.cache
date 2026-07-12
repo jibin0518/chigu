@@ -1,8 +1,8 @@
 {
   "version": 2,
-  "dgSpecHash": "eZUud1Dc1iQ=",
+  "dgSpecHash": "IZc477ca0fc=",
   "success": true,
-  "projectFilePath": "D:\\Github\\autochi\\autochi.csproj",
+  "projectFilePath": "D:\\Github\\chigu\\autochi.csproj",
   "expectedPackageFiles": [
     "C:\\Users\\jibin\\.nuget\\packages\\acadsharp\\3.6.35\\acadsharp.3.6.35.nupkg.sha512"
   ],

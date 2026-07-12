@@ -29,27 +29,35 @@ internal static class Program
 
             CadDocument document = DwgReader.Read(dwgPath);
 
+            PartDetector.PrintLargestFixtureShape(document);
+
+            PartDetector.DetectedShape largestShape =
+                PartDetector.FindLargestFixtureShape(document);
+
+            Console.WriteLine();
+            Console.WriteLine("가장 큰 도형:");
+            Console.WriteLine(largestShape);
+
             PrintDocumentInfo(document);
             PrintEntities(document);
-            PrintFixtureEntities(document);
-            PrintBoltHoleLayout(document);
+            PrintTargetLayerClassification(document);
 
             string directory = Path.GetDirectoryName(dwgPath)!;
             string name = Path.GetFileNameWithoutExtension(dwgPath);
 
-            //string allObjectsPath = Path.Combine(directory, $"{name}_objects.txt");
-            string fixturePath = Path.Combine(directory, $"{name}_치구_분류.txt");
-            string boltHoleLayoutPath = Path.Combine(directory,$"{name}_볼트 구멍_레이아웃_분류.txt");
+            string allObjectsPath = Path.Combine(directory, $"{name}_objects.txt");
+            string classificationPath = Path.Combine(
+                directory,
+                $"{name}_치구_볼트구멍_분류.txt"
+            );
 
-            //SaveEntityReport(document, allObjectsPath);
-            SaveFixtureReport(document, fixturePath);
-            SaveBoltHoleLayoutReport(document, boltHoleLayoutPath);
+            SaveEntityReport(document, allObjectsPath);
+            SaveTargetLayerClassificationReport(document, classificationPath);
 
             Console.WriteLine();
             Console.WriteLine("결과 저장 완료:");
-            //Console.WriteLine(allObjectsPath);
-            Console.WriteLine(fixturePath);
-            Console.WriteLine(boltHoleLayoutPath);
+            Console.WriteLine(allObjectsPath);
+            Console.WriteLine(classificationPath);
             Console.WriteLine();
             Console.WriteLine("아무 키나 누르면 종료됩니다.");
             Console.ReadKey();
@@ -204,21 +212,26 @@ internal static class Program
         public double MaxY { get; init; }
     }
 
-    private static List<IGrouping<short, EntitySizeInfo>>
-        GetFixtureColorGroups(CadDocument document)
+    private static readonly string[] TargetLayers =
+    {
+        "치구",
+        "볼트 구멍"
+    };
+
+    private static IEnumerable<EntitySizeInfo> GetTargetLayerEntities(
+        CadDocument document,
+        string layerName
+    )
     {
         return document.Entities
             .Where(entity =>
                 string.Equals(
                     entity.Layer?.Name?.Trim(),
-                    "치구",
+                    layerName,
                     StringComparison.OrdinalIgnoreCase
                 )
             )
-            .Select(CreateEntitySizeInfo)
-            .GroupBy(info => info.ColorIndex)
-            .OrderBy(group => group.Key)
-            .ToList();
+            .Select(CreateEntitySizeInfo);
     }
 
     private static EntitySizeInfo CreateEntitySizeInfo(Entity entity)
@@ -239,10 +252,10 @@ internal static class Program
             {
                 Entity = entity,
                 TypeName = GetSimpleEntityType(entity),
-                ColorIndex = GetColorIndex(entity),
+                ColorIndex = GetEffectiveColorIndex(entity),
                 Width = width,
                 Height = height,
-                Area = width * height,
+                Area = CalculateSortArea(entity, width, height),
                 MinX = minX,
                 MinY = minY,
                 MaxX = maxX,
@@ -255,9 +268,22 @@ internal static class Program
             {
                 Entity = entity,
                 TypeName = GetSimpleEntityType(entity),
-                ColorIndex = GetColorIndex(entity)
+                ColorIndex = GetEffectiveColorIndex(entity)
             };
         }
+    }
+
+    private static double CalculateSortArea(
+        Entity entity,
+        double width,
+        double height
+    )
+    {
+        return entity switch
+        {
+            Circle circle => Math.PI * circle.Radius * circle.Radius,
+            _ => width * height
+        };
     }
 
     private static string GetSimpleEntityType(Entity entity)
@@ -277,11 +303,18 @@ internal static class Program
         };
     }
 
-    private static short GetColorIndex(Entity entity)
+    private static short GetEffectiveColorIndex(Entity entity)
     {
         try
         {
-            return Convert.ToInt16(entity.Color.Index);
+            short entityColor = Convert.ToInt16(entity.Color.Index);
+
+            if (entityColor == 256 && entity.Layer != null)
+            {
+                return Convert.ToInt16(entity.Layer.Color.Index);
+            }
+
+            return entityColor;
         }
         catch
         {
@@ -308,295 +341,142 @@ internal static class Program
         };
     }
 
-    private static void PrintFixtureEntities(CadDocument document)
+    private static void PrintTargetLayerClassification(CadDocument document)
     {
         Console.WriteLine();
-        Console.WriteLine("===== 치구 레이어 색상별 분류 =====");
+        Console.WriteLine("===== 대상 레이어 분류 =====");
 
-        List<IGrouping<short, EntitySizeInfo>> colorGroups =
-            GetFixtureColorGroups(document);
-
-        Console.WriteLine(
-            $"치구 레이어 총 객체 수: {colorGroups.Sum(group => group.Count())}"
-        );
-        Console.WriteLine();
-
-        foreach (IGrouping<short, EntitySizeInfo> colorGroup in colorGroups)
+        foreach (string layerName in TargetLayers)
         {
+            List<EntitySizeInfo> entities = GetTargetLayerEntities(
+                document,
+                layerName
+            ).ToList();
+
+            Console.WriteLine();
             Console.WriteLine(
-                $"===== {GetColorName(colorGroup.Key)} ({colorGroup.Key}) " +
-                $"총 {colorGroup.Count()}개 ====="
+                $"===== Layer: {layerName} / 총 {entities.Count}개 ====="
             );
 
-            foreach (IGrouping<string, EntitySizeInfo> typeGroup in colorGroup
+            if (entities.Count == 0)
+            {
+                Console.WriteLine("객체가 없습니다.");
+                continue;
+            }
+
+            foreach (IGrouping<string, EntitySizeInfo> shapeGroup in entities
                          .GroupBy(info => info.TypeName)
                          .OrderBy(group => group.Key))
             {
                 Console.WriteLine(
-                    $"  ├─ {typeGroup.Key} ({typeGroup.Count()}개)"
+                    $"  ├─ {shapeGroup.Key} ({shapeGroup.Count()}개)"
                 );
 
-                int rank = 1;
-
-                foreach (EntitySizeInfo info in typeGroup
-                             .OrderByDescending(item => item.Area))
+                foreach (IGrouping<short, EntitySizeInfo> colorGroup in shapeGroup
+                             .GroupBy(info => info.ColorIndex)
+                             .OrderBy(group => group.Key))
                 {
                     Console.WriteLine(
-                        $"  │   {rank}. Handle={info.Entity.Handle}, " +
-                        $"크기={info.Width:F3} x {info.Height:F3}, " +
-                        $"넓이={info.Area:F3}, " +
-                        $"범위=({info.MinX:F3}, {info.MinY:F3}) ~ " +
-                        $"({info.MaxX:F3}, {info.MaxY:F3})"
+                        $"  │   ├─ {GetColorName(colorGroup.Key)} " +
+                        $"({colorGroup.Key}) ({colorGroup.Count()}개)"
                     );
-                    rank++;
+
+                    int rank = 1;
+
+                    foreach (EntitySizeInfo info in colorGroup
+                                 .OrderByDescending(item => item.Area))
+                    {
+                        Console.WriteLine(
+                            $"  │   │   {rank}. " +
+                            $"Handle={info.Entity.Handle}, " +
+                            $"크기={info.Width:F3} x {info.Height:F3}, " +
+                            $"넓이={info.Area:F3}, " +
+                            $"범위=({info.MinX:F3}, {info.MinY:F3}) ~ " +
+                            $"({info.MaxX:F3}, {info.MaxY:F3})"
+                        );
+
+                        rank++;
+                    }
                 }
             }
-
-            Console.WriteLine();
         }
     }
 
-    private static void SaveFixtureReport(
+    private static void SaveTargetLayerClassificationReport(
         CadDocument document,
         string outputPath
     )
     {
-        List<IGrouping<short, EntitySizeInfo>> colorGroups =
-            GetFixtureColorGroups(document);
-
         using StreamWriter writer = new(
             outputPath,
             false,
             new UTF8Encoding(true)
         );
 
-        writer.WriteLine("===== 치구 레이어 색상별 객체 분류 =====");
-        writer.WriteLine(
-            $"총 객체 수: {colorGroups.Sum(group => group.Count())}"
-        );
+        writer.WriteLine("===== 치구 / 볼트 구멍 레이어 분류 =====");
+        writer.WriteLine("정렬 순서: 레이어 → 도형 → 색상 → 넓이 내림차순");
         writer.WriteLine();
 
-        foreach (IGrouping<short, EntitySizeInfo> colorGroup in colorGroups)
+        foreach (string layerName in TargetLayers)
         {
+            List<EntitySizeInfo> entities = GetTargetLayerEntities(
+                document,
+                layerName
+            ).ToList();
+
             writer.WriteLine(
-                $"===== {GetColorName(colorGroup.Key)} ({colorGroup.Key}) " +
-                $"총 {colorGroup.Count()}개 ====="
+                $"===== Layer: {layerName} / 총 {entities.Count}개 ====="
             );
 
-            foreach (IGrouping<string, EntitySizeInfo> typeGroup in colorGroup
+            if (entities.Count == 0)
+            {
+                writer.WriteLine("객체가 없습니다.");
+                writer.WriteLine();
+                continue;
+            }
+
+            foreach (IGrouping<string, EntitySizeInfo> shapeGroup in entities
                          .GroupBy(info => info.TypeName)
                          .OrderBy(group => group.Key))
             {
                 writer.WriteLine(
-                    $"  ├─ {typeGroup.Key} ({typeGroup.Count()}개)"
+                    $"  ├─ {shapeGroup.Key} ({shapeGroup.Count()}개)"
                 );
 
-                int rank = 1;
-
-                foreach (EntitySizeInfo info in typeGroup
-                             .OrderByDescending(item => item.Area))
+                foreach (IGrouping<short, EntitySizeInfo> colorGroup in shapeGroup
+                             .GroupBy(info => info.ColorIndex)
+                             .OrderBy(group => group.Key))
                 {
                     writer.WriteLine(
-                        $"  │   {rank}. Handle={info.Entity.Handle}, " +
-                        $"Layer={info.Entity.Layer?.Name}, " +
-                        $"Color={GetColorName(info.ColorIndex)}({info.ColorIndex}), " +
-                        $"Width={info.Width:F6}, Height={info.Height:F6}, " +
-                        $"Area={info.Area:F6}, " +
-                        $"Min=({info.MinX:F6}, {info.MinY:F6}), " +
-                        $"Max=({info.MaxX:F6}, {info.MaxY:F6})"
-                    );
-                    writer.WriteLine(
-                        $"  │      {GetEntityDescription(rank - 1, info.Entity)}"
-                    );
-                    rank++;
-                }
-                writer.WriteLine("  │");
-            }
-            writer.WriteLine();
-        }
-    }
-
-    private static IEnumerable<Entity> GetBoltHoleLayoutEntities(
-    CadDocument document
-    )
-    {
-        var layout = document.Layouts
-            .FirstOrDefault(item =>
-                string.Equals(
-                    item.Name?.Trim(),
-                    "볼트 구멍",
-                    StringComparison.OrdinalIgnoreCase
-                )
-            );
-
-        if (layout?.AssociatedBlock == null)
-        {
-            return Enumerable.Empty<Entity>();
-        }
-
-        return layout.AssociatedBlock.Entities;
-    }
-
-    private static List<IGrouping<short, EntitySizeInfo>>
-    GetBoltHoleLayoutColorGroups(CadDocument document)
-    {
-        return GetBoltHoleLayoutEntities(document)
-            .Select(CreateEntitySizeInfo)
-            .GroupBy(info => info.ColorIndex)
-            .OrderBy(group => group.Key)
-            .ToList();
-    }
-
-    private static void PrintBoltHoleLayout(CadDocument document)
-    {
-        Console.WriteLine();
-        Console.WriteLine("===== '볼트 구멍' 레이아웃 색상별 분류 =====");
-
-        List<IGrouping<short, EntitySizeInfo>> colorGroups =
-            GetBoltHoleLayoutColorGroups(document);
-
-        int totalCount = colorGroups.Sum(group => group.Count());
-
-        if (totalCount == 0)
-        {
-            bool layoutExists = document.Layouts.Any(layout =>
-                string.Equals(
-                    layout.Name?.Trim(),
-                    "볼트 구멍",
-                    StringComparison.OrdinalIgnoreCase
-                )
-            );
-
-            Console.WriteLine(
-                layoutExists
-                    ? "'볼트 구멍' 레이아웃은 있지만 객체가 없습니다."
-                    : "'볼트 구멍' 레이아웃을 찾지 못했습니다."
-            );
-
-            return;
-        }
-
-        Console.WriteLine($"총 객체 수: {totalCount}");
-        Console.WriteLine();
-
-        foreach (IGrouping<short, EntitySizeInfo> colorGroup in colorGroups)
-        {
-            Console.WriteLine(
-                $"===== {GetColorName(colorGroup.Key)} ({colorGroup.Key}) " +
-                $"총 {colorGroup.Count()}개 ====="
-            );
-
-            foreach (IGrouping<string, EntitySizeInfo> typeGroup in colorGroup
-                        .GroupBy(info => info.TypeName)
-                        .OrderBy(group => group.Key))
-            {
-                Console.WriteLine(
-                    $"  ├─ {typeGroup.Key} ({typeGroup.Count()}개)"
-                );
-
-                int rank = 1;
-
-                foreach (EntitySizeInfo info in typeGroup
-                            .OrderByDescending(item => item.Area))
-                {
-                    Console.WriteLine(
-                        $"  │   {rank}. " +
-                        $"Handle={info.Entity.Handle}, " +
-                        $"크기={info.Width:F3} x {info.Height:F3}, " +
-                        $"넓이={info.Area:F3}, " +
-                        $"범위=({info.MinX:F3}, {info.MinY:F3}) ~ " +
-                        $"({info.MaxX:F3}, {info.MaxY:F3})"
+                        $"  │   ├─ {GetColorName(colorGroup.Key)} " +
+                        $"({colorGroup.Key}) ({colorGroup.Count()}개)"
                     );
 
-                    rank++;
-                }
-            }
+                    int rank = 1;
 
-            Console.WriteLine();
-        }
-    }
+                    foreach (EntitySizeInfo info in colorGroup
+                                 .OrderByDescending(item => item.Area))
+                    {
+                        writer.WriteLine(
+                            $"  │   │   {rank}. " +
+                            $"Handle={info.Entity.Handle}, " +
+                            $"Layer={info.Entity.Layer?.Name}, " +
+                            $"Color={GetColorName(info.ColorIndex)}" +
+                            $"({info.ColorIndex}), " +
+                            $"Width={info.Width:F6}, " +
+                            $"Height={info.Height:F6}, " +
+                            $"Area={info.Area:F6}, " +
+                            $"Min=({info.MinX:F6}, {info.MinY:F6}), " +
+                            $"Max=({info.MaxX:F6}, {info.MaxY:F6})"
+                        );
 
-    private static void SaveBoltHoleLayoutReport(
-    CadDocument document,
-    string outputPath
-    )
-    {
-        List<IGrouping<short, EntitySizeInfo>> colorGroups =
-            GetBoltHoleLayoutColorGroups(document);
+                        writer.WriteLine(
+                            $"  │   │      " +
+                            GetEntityDescription(rank - 1, info.Entity)
+                        );
 
-        using StreamWriter writer = new(
-            outputPath,
-            false,
-            new UTF8Encoding(true)
-        );
-
-        writer.WriteLine(
-            "===== '볼트 구멍' 레이아웃 색상별 객체 분류 ====="
-        );
-
-        int totalCount = colorGroups.Sum(group => group.Count());
-
-        writer.WriteLine($"총 객체 수: {totalCount}");
-        writer.WriteLine();
-
-        if (totalCount == 0)
-        {
-            bool layoutExists = document.Layouts.Any(layout =>
-                string.Equals(
-                    layout.Name?.Trim(),
-                    "볼트 구멍",
-                    StringComparison.OrdinalIgnoreCase
-                )
-            );
-
-            writer.WriteLine(
-                layoutExists
-                    ? "'볼트 구멍' 레이아웃은 있지만 객체가 없습니다."
-                    : "'볼트 구멍' 레이아웃을 찾지 못했습니다."
-            );
-
-            return;
-        }
-
-        foreach (IGrouping<short, EntitySizeInfo> colorGroup in colorGroups)
-        {
-            writer.WriteLine(
-                $"===== {GetColorName(colorGroup.Key)} ({colorGroup.Key}) " +
-                $"총 {colorGroup.Count()}개 ====="
-            );
-
-            foreach (IGrouping<string, EntitySizeInfo> typeGroup in colorGroup
-                        .GroupBy(info => info.TypeName)
-                        .OrderBy(group => group.Key))
-            {
-                writer.WriteLine(
-                    $"  ├─ {typeGroup.Key} ({typeGroup.Count()}개)"
-                );
-
-                int rank = 1;
-
-                foreach (EntitySizeInfo info in typeGroup
-                            .OrderByDescending(item => item.Area))
-                {
-                    writer.WriteLine(
-                        $"  │   {rank}. " +
-                        $"Handle={info.Entity.Handle}, " +
-                        $"Layer={info.Entity.Layer?.Name}, " +
-                        $"Color={GetColorName(info.ColorIndex)}" +
-                        $"({info.ColorIndex}), " +
-                        $"Width={info.Width:F6}, " +
-                        $"Height={info.Height:F6}, " +
-                        $"Area={info.Area:F6}, " +
-                        $"Min=({info.MinX:F6}, {info.MinY:F6}), " +
-                        $"Max=({info.MaxX:F6}, {info.MaxY:F6})"
-                    );
-
-                    writer.WriteLine(
-                        $"  │      " +
-                        $"{GetEntityDescription(rank - 1, info.Entity)}"
-                    );
-
-                    rank++;
+                        rank++;
+                    }
                 }
 
                 writer.WriteLine("  │");
@@ -605,4 +485,5 @@ internal static class Program
             writer.WriteLine();
         }
     }
+
 }
