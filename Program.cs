@@ -1,8 +1,9 @@
 ﻿using System;
-using System.IO;
-using System.Text;
+using System.Collections.Generic;
+using System.Linq;
 using System.Windows.Forms;
 using ACadSharp;
+using ACadSharp.Entities;
 using ACadSharp.IO;
 
 namespace DwgAutoResize;
@@ -12,85 +13,59 @@ internal static class Program
     [STAThread]
     private static void Main()
     {
-        Console.OutputEncoding = Encoding.UTF8;
-
         try
         {
             string? dwgPath = SelectDwgFile();
 
             if (string.IsNullOrWhiteSpace(dwgPath))
             {
-                Console.WriteLine("파일 선택이 취소되었습니다.");
                 return;
             }
 
-            Console.WriteLine($"선택 파일: {dwgPath}");
-            Console.WriteLine("DWG 읽는 중...");
-
+            // DWG 파일 전체를 메모리로 읽는다.
             CadDocument document = DwgReader.Read(dwgPath);
 
-            Console.WriteLine("DWG 읽기 완료.");
+            // 문서 전체 정보는 document 안에 그대로 들어 있다.
+            DrawingData drawingData = ReadDrawingData(document);
 
-            PartDetector.DetectedParts parts =
-                PartDetector.Analyze(document);
+            /*
+             * 이후부터는 drawingData를 사용하면 된다.
+             *
+             * 예:
+             * drawingData.Version
+             * drawingData.LayerCount
+             * drawingData.BlockCount
+             * drawingData.Entities
+             *
+             * 콘솔 출력과 TXT 저장은 하지 않는다.
+             */
+            EntityData? Center_Compression_Chigu = null;
+            int maxVertexCount = -1;
 
-            PartDetector.PrintAnalysis(parts);
-
-            string directory = Path.GetDirectoryName(dwgPath)!;
-            string fileName = Path.GetFileNameWithoutExtension(dwgPath);
-
-            string analysisPath = Path.Combine(
-                directory,
-                $"{fileName}_분류결과.txt"
-            );
-
-            PartDetector.SaveAnalysisReport(
-                parts,
-                analysisPath
-            );
-
-            DrawingModifier.TargetSize? target =
-                ShowTargetSizeDialog(parts);
-
-            if (target == null)
+             foreach (EntityData x in drawingData.Entities)
             {
-                Console.WriteLine("크기 입력이 취소되었습니다.");
-                Console.WriteLine($"분류 결과는 저장되었습니다: {analysisPath}");
-                Console.ReadKey();
-                return;
+                if (x.LayerName == "치구")
+                {
+                    if (x.ObjectName == "LWPOLYLINE")
+                    {
+                        if (maxVertexCount<x.Vertices.Count)
+                        {
+                            maxVertexCount = x.Vertices.Count;
+                            Center_Compression_Chigu = x;
+                        }
+                    }
+                }
             }
-
-            DrawingModifier.Apply(
-                parts,
-                target
-            );
-
-            string outputPath = Path.Combine(
-                directory,
-                $"{fileName}_{target}.dwg"
-            );
-
-            DrawingModifier.SaveAsNewDwg(
-                document,
-                outputPath
-            );
-
-            Console.WriteLine();
-            Console.WriteLine("완료");
-            Console.WriteLine($"분류 결과: {analysisPath}");
-            Console.WriteLine($"수정 DWG: {outputPath}");
-            Console.WriteLine();
-            Console.WriteLine("아무 키나 누르면 종료됩니다.");
-            Console.ReadKey();
+            Console.WriteLine(Center_Compression_Chigu);
         }
         catch (Exception ex)
         {
-            Console.WriteLine();
-            Console.WriteLine("오류 발생:");
-            Console.WriteLine(ex);
-            Console.WriteLine();
-            Console.WriteLine("아무 키나 누르면 종료됩니다.");
-            Console.ReadKey();
+            MessageBox.Show(
+                ex.ToString(),
+                "오류",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error
+            );
         }
     }
 
@@ -98,7 +73,7 @@ internal static class Program
     {
         using OpenFileDialog dialog = new()
         {
-            Title = "수정할 DWG 파일 선택",
+            Title = "확인할 DWG 파일 선택",
             Filter = "AutoCAD DWG 파일 (*.dwg)|*.dwg|모든 파일 (*.*)|*.*",
             Multiselect = false,
             CheckFileExists = true
@@ -109,147 +84,258 @@ internal static class Program
             : null;
     }
 
-    private static DrawingModifier.TargetSize? ShowTargetSizeDialog(
-        PartDetector.DetectedParts parts
+    /// <summary>
+    /// DWG 문서 전체 정보를 읽어서 DrawingData로 정리한다.
+    /// </summary>
+    private static DrawingData ReadDrawingData(
+        CadDocument document
     )
     {
-        using Form form = new()
+        return new DrawingData
         {
-            Text = "수정할 크기 입력",
-            Width = 390,
-            Height = 300,
-            StartPosition = FormStartPosition.CenterScreen,
-            FormBorderStyle = FormBorderStyle.FixedDialog,
-            MaximizeBox = false,
-            MinimizeBox = false
-        };
-
-        Label currentLabel = new()
-        {
-            Left = 25,
-            Top = 20,
-            Width = 330,
-            Height = 30,
-            Text =
-                $"현재 감지 크기: " +
-                $"{parts.CurrentWidth:0.###} x " +
-                $"{parts.CurrentHeight:0.###} x " +
-                $"{parts.CurrentDepth:0.###}"
-        };
-
-        Label widthLabel = new()
-        {
-            Left = 25,
-            Top = 70,
-            Width = 100,
-            Text = "가로"
-        };
-
-        NumericUpDown widthInput = CreateNumberInput(
-            140,
-            65,
-            parts.CurrentWidth
-        );
-
-        Label heightLabel = new()
-        {
-            Left = 25,
-            Top = 110,
-            Width = 100,
-            Text = "세로"
-        };
-
-        NumericUpDown heightInput = CreateNumberInput(
-            140,
-            105,
-            parts.CurrentHeight
-        );
-
-        Label depthLabel = new()
-        {
-            Left = 25,
-            Top = 150,
-            Width = 100,
-            Text = "두께"
-        };
-
-        NumericUpDown depthInput = CreateNumberInput(
-            140,
-            145,
-            parts.CurrentDepth
-        );
-
-        Button okButton = new()
-        {
-            Left = 140,
-            Top = 205,
-            Width = 90,
-            Height = 32,
-            Text = "수정",
-            DialogResult = DialogResult.OK
-        };
-
-        Button cancelButton = new()
-        {
-            Left = 240,
-            Top = 205,
-            Width = 90,
-            Height = 32,
-            Text = "취소",
-            DialogResult = DialogResult.Cancel
-        };
-
-        form.Controls.AddRange(
-        [
-            currentLabel,
-            widthLabel,
-            widthInput,
-            heightLabel,
-            heightInput,
-            depthLabel,
-            depthInput,
-            okButton,
-            cancelButton
-        ]);
-
-        form.AcceptButton = okButton;
-        form.CancelButton = cancelButton;
-
-        if (form.ShowDialog() != DialogResult.OK)
-        {
-            return null;
-        }
-
-        return new DrawingModifier.TargetSize
-        {
-            Width = (double)widthInput.Value,
-            Height = (double)heightInput.Value,
-            Depth = (double)depthInput.Value
+            Document = document,
+            Version = document.Header.Version.ToString(),
+            LayerCount = document.Layers.Count,
+            BlockCount = document.BlockRecords.Count,
+            EntityCount = document.Entities.Count(),
+            Entities = document.Entities
+                .Select(CreateEntityData)
+                .ToList()
         };
     }
 
-    private static NumericUpDown CreateNumberInput(
-        int left,
-        int top,
-        double value
+    /// <summary>
+    /// CAD 객체 하나의 공통 정보와 종류별 정보를 읽는다.
+    /// </summary>
+    private static EntityData CreateEntityData(
+        Entity entity
     )
     {
-        decimal safeValue = (decimal)Math.Clamp(
-            value,
-            0.001,
-            1000000.0
-        );
-
-        return new NumericUpDown
+        EntityData data = new()
         {
-            Left = left,
-            Top = top,
-            Width = 190,
-            DecimalPlaces = 3,
-            Minimum = 0.001m,
-            Maximum = 1000000m,
-            Increment = 1m,
-            Value = safeValue
+            Entity = entity,
+            ObjectName = entity.ObjectName,
+            Handle = entity.Handle.ToString(),
+            LayerName = entity.Layer?.Name ?? ""
         };
+
+        switch (entity)
+        {
+            case Line line:
+                data.StartX = line.StartPoint.X;
+                data.StartY = line.StartPoint.Y;
+                data.StartZ = line.StartPoint.Z;
+
+                data.EndX = line.EndPoint.X;
+                data.EndY = line.EndPoint.Y;
+                data.EndZ = line.EndPoint.Z;
+                break;
+
+            case Arc arc:
+                data.CenterX = arc.Center.X;
+                data.CenterY = arc.Center.Y;
+                data.CenterZ = arc.Center.Z;
+
+                data.Radius = arc.Radius;
+                data.StartAngle = arc.StartAngle;
+                data.EndAngle = arc.EndAngle;
+                break;
+
+            case Circle circle:
+                data.CenterX = circle.Center.X;
+                data.CenterY = circle.Center.Y;
+                data.CenterZ = circle.Center.Z;
+
+                data.Radius = circle.Radius;
+                data.Diameter = circle.Radius * 2.0;
+                break;
+
+            case LwPolyline polyline:
+                data.IsClosed = polyline.IsClosed;
+
+                data.Vertices = polyline.Vertices
+                    .Select(vertex => new PointData
+                    {
+                        X = vertex.Location.X,
+                        Y = vertex.Location.Y,
+                        Z = 0.0
+                    })
+                    .ToList();
+                break;
+
+            case Polyline2D polyline:
+                data.IsClosed = polyline.IsClosed;
+
+                data.Vertices = polyline.Vertices
+                    .Select(vertex => new PointData
+                    {
+                        X = vertex.Location.X,
+                        Y = vertex.Location.Y,
+                        Z = vertex.Location.Z
+                    })
+                    .ToList();
+                break;
+
+            case TextEntity text:
+                data.TextValue = text.Value;
+
+                data.InsertX = text.InsertPoint.X;
+                data.InsertY = text.InsertPoint.Y;
+                data.InsertZ = text.InsertPoint.Z;
+                break;
+
+            case MText mtext:
+                data.TextValue = mtext.Value;
+
+                data.InsertX = mtext.InsertPoint.X;
+                data.InsertY = mtext.InsertPoint.Y;
+                data.InsertZ = mtext.InsertPoint.Z;
+                break;
+
+            case Insert insert:
+                data.BlockName = insert.Block?.Name ?? "";
+
+                data.InsertX = insert.InsertPoint.X;
+                data.InsertY = insert.InsertPoint.Y;
+                data.InsertZ = insert.InsertPoint.Z;
+                break;
+
+            case Dimension dimension:
+                data.TextValue = dimension.Text;
+
+                data.TextPositionX =
+                    dimension.TextMiddlePoint.X;
+
+                data.TextPositionY =
+                    dimension.TextMiddlePoint.Y;
+
+                data.TextPositionZ =
+                    dimension.TextMiddlePoint.Z;
+                break;
+        }
+
+        /*
+         * 바운딩박스를 지원하는 객체는 위치와 크기도 저장한다.
+         */
+        try
+        {
+            var box = entity.GetBoundingBox();
+
+            data.MinX = box.Min.X;
+            data.MinY = box.Min.Y;
+            data.MinZ = box.Min.Z;
+
+            data.MaxX = box.Max.X;
+            data.MaxY = box.Max.Y;
+            data.MaxZ = box.Max.Z;
+
+            data.Width = Math.Abs(
+                box.Max.X - box.Min.X
+            );
+
+            data.Height = Math.Abs(
+                box.Max.Y - box.Min.Y
+            );
+
+            data.CenterBoxX =
+                (box.Min.X + box.Max.X) / 2.0;
+
+            data.CenterBoxY =
+                (box.Min.Y + box.Max.Y) / 2.0;
+        }
+        catch
+        {
+            // 바운딩박스를 지원하지 않는 객체는 기본값 유지
+        }
+
+        return data;
+    }
+
+    /// <summary>
+    /// DWG 문서 전체를 메모리에서 사용하기 위한 데이터.
+    /// </summary>
+    internal sealed class DrawingData
+    {
+        public required CadDocument Document { get; init; }
+
+        public required string Version { get; init; }
+
+        public int LayerCount { get; init; }
+
+        public int BlockCount { get; init; }
+
+        public int EntityCount { get; init; }
+
+        public required List<EntityData> Entities { get; init; }
+    }
+
+    /// <summary>
+    /// CAD 객체 하나의 정보를 저장한다.
+    /// 실제 원본 객체는 Entity 속성에 그대로 보관된다.
+    /// </summary>
+    internal sealed class EntityData
+    {
+        public required Entity Entity { get; init; }
+
+        public required string ObjectName { get; init; }
+
+        public required string Handle { get; init; }
+
+        public required string LayerName { get; init; }
+
+        public bool IsClosed { get; set; }
+
+        public List<PointData> Vertices { get; set; } = new();
+
+        public double StartX { get; set; }
+        public double StartY { get; set; }
+        public double StartZ { get; set; }
+
+        public double EndX { get; set; }
+        public double EndY { get; set; }
+        public double EndZ { get; set; }
+
+        public double CenterX { get; set; }
+        public double CenterY { get; set; }
+        public double CenterZ { get; set; }
+
+        public double Radius { get; set; }
+        public double Diameter { get; set; }
+
+        public double StartAngle { get; set; }
+        public double EndAngle { get; set; }
+
+        public string TextValue { get; set; } = "";
+
+        public string BlockName { get; set; } = "";
+
+        public double InsertX { get; set; }
+        public double InsertY { get; set; }
+        public double InsertZ { get; set; }
+
+        public double TextPositionX { get; set; }
+        public double TextPositionY { get; set; }
+        public double TextPositionZ { get; set; }
+
+        public double MinX { get; set; }
+        public double MinY { get; set; }
+        public double MinZ { get; set; }
+
+        public double MaxX { get; set; }
+        public double MaxY { get; set; }
+        public double MaxZ { get; set; }
+
+        public double Width { get; set; }
+        public double Height { get; set; }
+
+        public double CenterBoxX { get; set; }
+        public double CenterBoxY { get; set; }
+    }
+
+    internal sealed class PointData
+    {
+        public double X { get; init; }
+        public double Y { get; init; }
+        public double Z { get; init; }
     }
 }
