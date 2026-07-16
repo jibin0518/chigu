@@ -28,6 +28,8 @@ internal static class Program
             // 문서 전체 정보는 document 안에 그대로 들어 있다.
             DrawingData drawingData = ReadDrawingData(document);
 
+            //--------------------------------압축치구--------------------------------
+
             EntityData mainChigu = FindMainChigu(drawingData);
 
             EntityData topPlate =
@@ -99,49 +101,51 @@ internal static class Program
             BoltHolePair rightCenterBolt =
                 centerBoltHoles[1];
 
-            foreach (BoltHolePair pair in centerBoltHoles)
-            {
-                Console.WriteLine(
-                    $"중심=({pair.CenterX}, {pair.CenterY})"
-                );
+            
 
-                Console.WriteLine(
-                    $"바깥 원 Handle={pair.OuterCircle.Handle}, " +
-                    $"Radius={pair.OuterCircle.Radius}"
-                );
+            // foreach (BoltHolePair pair in centerBoltHoles)
+            // {
+            //     Console.WriteLine(
+            //         $"중심=({pair.CenterX}, {pair.CenterY})"
+            //     );
 
-                Console.WriteLine(
-                    $"안쪽 원 Handle={pair.InnerCircle.Handle}, " +
-                    $"Radius={pair.InnerCircle.Radius}"
-                );
+            //     Console.WriteLine(
+            //         $"바깥 원 Handle={pair.OuterCircle.Handle}, " +
+            //         $"Radius={pair.OuterCircle.Radius}"
+            //     );
 
-                Console.WriteLine();
-            }
+            //     Console.WriteLine(
+            //         $"안쪽 원 Handle={pair.InnerCircle.Handle}, " +
+            //         $"Radius={pair.InnerCircle.Radius}"
+            //     );
 
-            Console.WriteLine(
-                $"Handle={topLeftCircle.Handle}, " +
-                $"X={topLeftCircle.CenterX}, " +
-                $"Y={topLeftCircle.CenterY}"
-            );
+            //     Console.WriteLine();
+            // }
 
-            Console.WriteLine(
-                $"Handle={topRightCircle.Handle}, " +
-                $"X={topRightCircle.CenterX}, " +
-                $"Y={topRightCircle.CenterY}"
-            );
+            // Console.WriteLine(
+            //     $"Handle={topLeftCircle.Handle}, " +
+            //     $"X={topLeftCircle.CenterX}, " +
+            //     $"Y={topLeftCircle.CenterY}"
+            // );
 
-            Console.WriteLine(
-                $"Handle={bottomLeftCircle.Handle}, " +
-                $"X={bottomLeftCircle.CenterX}, " +
-                $"Y={bottomLeftCircle.CenterY}"
-            );
+            // Console.WriteLine(
+            //     $"Handle={topRightCircle.Handle}, " +
+            //     $"X={topRightCircle.CenterX}, " +
+            //     $"Y={topRightCircle.CenterY}"
+            // );
 
-            Console.WriteLine(
-                $"Handle={bottomRightCircle.Handle}, " +
-                $"X={bottomRightCircle.CenterX}, " +
-                $"Y={bottomRightCircle.CenterY}"
-            );
-                        // Console.WriteLine("위쪽 빨간 블록");
+            // Console.WriteLine(
+            //     $"Handle={bottomLeftCircle.Handle}, " +
+            //     $"X={bottomLeftCircle.CenterX}, " +
+            //     $"Y={bottomLeftCircle.CenterY}"
+            // );
+
+            // Console.WriteLine(
+            //     $"Handle={bottomRightCircle.Handle}, " +
+            //     $"X={bottomRightCircle.CenterX}, " +
+            //     $"Y={bottomRightCircle.CenterY}"
+            // );
+            // Console.WriteLine("위쪽 빨간 블록");
 
             // foreach (EntityData block in topRedBlocks)
             // {
@@ -206,6 +210,321 @@ internal static class Program
             // Console.WriteLine(
             //     $"중심=({topPlate.CenterBoxX}, {topPlate.CenterBoxY})"
             // );
+
+            //--------------------------------압축치구--------------------------------
+            //--------------------------------중간치구판--------------------------------
+            EntityData secondOuterPanel =
+                FindSecondOuterPanel(
+                    drawingData,
+                    mainChigu,
+                    3.0
+                );
+
+            List<EntityData> secondPanelCircles =
+                FindSecondPanelLargeCircles(
+                    drawingData,
+                    secondOuterPanel,
+                    12.0,
+                    2.0
+                );
+
+            EntityData secondTopLeftCircle =
+                secondPanelCircles[0];
+
+            EntityData secondTopRightCircle =
+                secondPanelCircles[1];
+
+            EntityData secondBottomLeftCircle =
+                secondPanelCircles[2];
+
+            EntityData secondBottomRightCircle =
+                secondPanelCircles[3];
+
+            List<BoltHolePair> boltHoles =
+                FindSecondPanelBoltHoles(
+                    drawingData,
+                    secondOuterPanel
+                );
+
+            BoltHolePair topLeft = boltHoles[0];
+            BoltHolePair topRight = boltHoles[1];
+            BoltHolePair bottomLeft = boltHoles[2];
+            BoltHolePair bottomRight = boltHoles[3];
+
+            EntityData centerBox =
+                FindSecondPanelCenterBox(
+                    drawingData,
+                    secondOuterPanel
+                );
+
+                     
+
+            // Console.WriteLine("두 번째 겉면");
+
+            // Console.WriteLine(
+            //     $"Handle={secondOuterPanel.Handle}"
+            // );
+
+            // Console.WriteLine(
+            //     $"크기={secondOuterPanel.Width} x " +
+            //     $"{secondOuterPanel.Height}"
+            // );
+
+            // Console.WriteLine(
+            //     $"중심=({secondOuterPanel.CenterBoxX}, " +
+            //     $"{secondOuterPanel.CenterBoxY})"
+            // );
+
+            // Console.WriteLine("사이드 바람 구멍");
+
+            // foreach (EntityData circle in secondPanelCircles)
+            // {
+            //     Console.WriteLine(
+            //         $"Handle={circle.Handle}, " +
+            //         $"Center=({circle.CenterX}, {circle.CenterY}), " +
+            //         $"Radius={circle.Radius}"
+            //     );
+            // }
+
+            // Console.WriteLine("볼트 구멍 원");
+
+            // foreach (BoltHolePair pair in boltHoles)
+            // {
+            //     Console.WriteLine(
+            //         $"Outer={pair.OuterCircle.Handle}, " +
+            //         $"Inner={pair.InnerCircle.Handle}, " +
+            //         $"Center=({pair.CenterX}, {pair.CenterY})"
+            //     );
+            // }
+
+            // Console.WriteLine("볼트 구멍 박스");
+            // Console.WriteLine($"Handle={centerBox.Handle}");
+            // Console.WriteLine(
+            //     $"Center=({centerBox.CenterBoxX}, {centerBox.CenterBoxY})"
+            // );
+            // Console.WriteLine(
+            //     $"Size={centerBox.Width} x {centerBox.Height}"
+            // );
+            //--------------------------------중간치구판--------------------------------
+            //--------------------------------중간치구벽--------------------------------
+            EntityData thirdOuterPanel =
+                FindThirdOuterPanel(
+                    drawingData,
+                    mainChigu,
+                    secondOuterPanel,
+                    3.0
+                );
+
+            EntityData thirdInnerBox =
+                FindThirdPanelInnerBox(
+                    drawingData,
+                    thirdOuterPanel
+                );   
+            
+            // Console.WriteLine("세 번째 겉면");
+            // Console.WriteLine($"Handle={thirdOuterPanel.Handle}");
+            // Console.WriteLine(
+            //     $"크기={thirdOuterPanel.Width} x " +
+            //     $"{thirdOuterPanel.Height}"
+            // );
+            // Console.WriteLine(
+            //     $"중심=({thirdOuterPanel.CenterBoxX}, " +
+            //     $"{thirdOuterPanel.CenterBoxY})"
+            // );
+
+            // Console.WriteLine("세 번째 내부 박스");
+            // Console.WriteLine($"Handle={thirdInnerBox.Handle}");
+            // Console.WriteLine(
+            //     $"크기={thirdInnerBox.Width} x " +
+            //     $"{thirdInnerBox.Height}"
+            // );
+            // Console.WriteLine(
+            //     $"중심=({thirdInnerBox.CenterBoxX}, " +
+            //     $"{thirdInnerBox.CenterBoxY})"
+            // );
+
+            //--------------------------------중간치구벽--------------------------------
+            //--------------------------------안쪽 중판--------------------------------
+
+            EntityData fourthPanel =
+                FindFourthPanel(
+                    drawingData,
+                    thirdOuterPanel
+                );
+
+            List<BoltHolePair> fourthBoltHoles =
+                FindFourthPanelBoltHoles(
+                    drawingData,
+                    fourthPanel
+                );
+
+            // Console.WriteLine("4번째 패널");
+            // Console.WriteLine($"Handle={fourthPanel.Handle}");
+            // Console.WriteLine(
+            //     $"Vertices={fourthPanel.Vertices.Count}"
+            // );
+            // Console.WriteLine(
+            //     $"크기={fourthPanel.Width} x {fourthPanel.Height}"
+            // );
+            // Console.WriteLine(
+            //     $"중심=({fourthPanel.CenterBoxX}, " +
+            //     $"{fourthPanel.CenterBoxY})"
+            // );
+            
+            // Console.WriteLine(
+            //     $"4번째 패널 볼트 구멍 쌍: {fourthBoltHoles.Count}개"
+            // );
+
+            // foreach (BoltHolePair pair in fourthBoltHoles)
+            // {
+            //     Console.WriteLine(
+            //         $"Center=({pair.CenterX}, {pair.CenterY}), " +
+            //         $"바깥 Handle={pair.OuterCircle.Handle}, " +
+            //         $"바깥 지름={pair.OuterCircle.Diameter}, " +
+            //         $"안쪽 Handle={pair.InnerCircle.Handle}, " +
+            //         $"안쪽 지름={pair.InnerCircle.Diameter}"
+            //     );
+            // }
+            //--------------------------------안쪽 중판--------------------------------
+            //--------------------------------밖쪽 중판--------------------------------
+            EntityData fifthOuterPanel =
+                FindFifthOuterPanel(
+                    drawingData,
+                    mainChigu,
+                    fourthPanel,
+                    4.0,
+                    2.0
+                );
+            List<EntityData> fifthPanelCircles =
+                FindFifthPanelLargeCircles(
+                    drawingData,
+                    fifthOuterPanel,
+                    10.0,
+                    2.0
+                );
+            EntityData fifthTopLeft =
+                fifthPanelCircles[0];
+
+            EntityData fifthTopRight =
+                fifthPanelCircles[1];
+
+            EntityData fifthBottomLeft =
+                fifthPanelCircles[2];
+
+            EntityData fifthBottomRight =
+                fifthPanelCircles[3];
+
+            List<BoltHolePair> fifthPanelBoltHoles =
+                FindFifthPanelBoltHoles(
+                    drawingData,
+                    fifthOuterPanel
+                );
+            
+            BoltHolePair fifthTopLeftBolt =
+                fifthPanelBoltHoles[0];
+
+            BoltHolePair fifthTopRightBolt =
+                fifthPanelBoltHoles[1];
+
+            BoltHolePair fifthBottomLeftBolt =
+                fifthPanelBoltHoles[2];
+
+            BoltHolePair fifthBottomRightBolt =
+                fifthPanelBoltHoles[3];
+
+            // Console.WriteLine("5번째 겉면");
+            // Console.WriteLine(
+            //     $"Handle={fifthOuterPanel.Handle}"
+            // );
+            // Console.WriteLine(
+            //     $"크기={fifthOuterPanel.Width} x " +
+            //     $"{fifthOuterPanel.Height}"
+            // );
+            // Console.WriteLine(
+            //     $"중심=({fifthOuterPanel.CenterBoxX}, " +
+            //     $"{fifthOuterPanel.CenterBoxY})"
+            // );
+            // foreach (EntityData circle in fifthPanelCircles)
+            // {
+            //     Console.WriteLine(
+            //         $"Handle={circle.Handle}, " +
+            //         $"Center=({circle.CenterX}, {circle.CenterY}), " +
+            //         $"Radius={circle.Radius}"
+            //     );
+            // }
+
+            // Console.WriteLine(
+            //     $"5번째 패널 볼트 구멍 쌍: {fifthPanelBoltHoles.Count}개"
+            // );
+
+            // foreach (BoltHolePair pair in fifthPanelBoltHoles)
+            // {
+            //     Console.WriteLine(
+            //         $"Center=({pair.CenterX}, {pair.CenterY}), " +
+            //         $"바깥 Handle={pair.OuterCircle.Handle}, " +
+            //         $"바깥 지름={pair.OuterCircle.Diameter}, " +
+            //         $"안쪽 Handle={pair.InnerCircle.Handle}, " +
+            //         $"안쪽 지름={pair.InnerCircle.Diameter}"
+            //     );
+            // }
+
+            //--------------------------------바닥판-------------------------------
+            EntityData sixthOuterPanel =
+                FindSixthOuterPanel(
+                    drawingData,
+                    mainChigu,
+                    fifthOuterPanel
+                );
+
+            List<BoltHolePair> sixthPanelBoltHoles =
+                FindSixthPanelBoltHoles(
+                    drawingData,
+                    sixthOuterPanel
+                );
+            
+            // Console.WriteLine("6번째 패널");
+            // Console.WriteLine($"Handle={sixthOuterPanel.Handle}");
+            // Console.WriteLine($"Center=({sixthOuterPanel.CenterBoxX}, {sixthOuterPanel.CenterBoxY})");
+            // Console.WriteLine($"Size={sixthOuterPanel.Width} x {sixthOuterPanel.Height}");
+
+            // Console.WriteLine(
+            //     $"6번째 패널 볼트 구멍 쌍: {sixthPanelBoltHoles.Count}개"
+            // );
+
+            // foreach (BoltHolePair pair in sixthPanelBoltHoles)
+            // {
+            //     Console.WriteLine(
+            //         $"Center=({pair.CenterX}, {pair.CenterY}), " +
+            //         $"바깥 Handle={pair.OuterCircle.Handle}, " +
+            //         $"바깥 지름={pair.OuterCircle.Diameter}, " +
+            //         $"안쪽 Handle={pair.InnerCircle.Handle}, " +
+            //         $"안쪽 지름={pair.InnerCircle.Diameter}"
+            //     );
+            // }
+        
+        double currentDepth =
+            topPlate.Height;
+
+        ResizeInput? resizeInput =
+            ShowResizeInputDialog(
+                mainChigu,
+                currentDepth
+            );
+
+        if (resizeInput == null)
+        {
+            return;
+        }
+
+        double halfWidthDelta =
+            resizeInput.WidthDelta / 2.0;
+
+        double halfHeightDelta =
+            resizeInput.HeightDelta / 2.0;
+
+        double halfDepthDelta =
+            resizeInput.DepthDelta / 2.0;
+
                     }
         catch (Exception ex)
         {
@@ -216,6 +535,8 @@ internal static class Program
                 MessageBoxIcon.Error
             );
         }
+
+        
     }
 
     private static string? SelectDwgFile()
@@ -495,6 +816,17 @@ internal static class Program
 
         public double CenterX => OuterCircle.CenterX;
         public double CenterY => OuterCircle.CenterY;
+    }
+
+    internal sealed class ResizeInput
+    {
+        public double TargetWidth { get; init; }
+        public double TargetHeight { get; init; }
+        public double TargetDepth { get; init; }
+
+        public double WidthDelta { get; init; }
+        public double HeightDelta { get; init; }
+        public double DepthDelta { get; init; }
     }
 
     private static EntityData FindMainChigu(DrawingData drawingData)
@@ -1079,5 +1411,1293 @@ internal static class Program
             .ToList();
 
         return result;
+    }
+
+    private static EntityData FindSecondOuterPanel(
+    DrawingData drawingData,
+    EntityData mainChigu,
+    double sizeTolerance = 3.0
+    )
+    {
+        EntityData? result = null;
+        double bestDistance = double.MaxValue;
+
+        foreach (EntityData x in drawingData.Entities)
+        {
+            if (x.LayerName != "치구")
+            {
+                continue;
+            }
+
+            if (x.ObjectName != "LWPOLYLINE")
+            {
+                continue;
+            }
+
+            if (!x.IsClosed)
+            {
+                continue;
+            }
+
+            // 첫 번째 메인 치구 자기 자신 제외
+            if (ReferenceEquals(x, mainChigu))
+            {
+                continue;
+            }
+
+            // 두 번째 패널은 첫 번째보다 오른쪽에 있어야 함
+            if (x.CenterBoxX <= mainChigu.MaxX)
+            {
+                continue;
+            }
+
+            // 가로 크기가 거의 같아야 함
+            bool sameWidth =
+                Math.Abs(x.Width - mainChigu.Width)
+                <= sizeTolerance;
+
+            // 세로 크기가 거의 같아야 함
+            bool sameHeight =
+                Math.Abs(x.Height - mainChigu.Height)
+                <= sizeTolerance;
+
+            if (!sameWidth || !sameHeight)
+            {
+                continue;
+            }
+
+            // 첫 번째 메인 치구와 세로 중심도 비슷해야 함
+            double yDistance =
+                Math.Abs(
+                    x.CenterBoxY -
+                    mainChigu.CenterBoxY
+                );
+
+            // 첫 번째 오른쪽 경계와 가장 가까운 후보 우선
+            double xDistance =
+                x.MinX -
+                mainChigu.MaxX;
+
+            double score =
+                xDistance + yDistance;
+
+            if (score < bestDistance)
+            {
+                bestDistance = score;
+                result = x;
+            }
+        }
+
+        if (result == null)
+        {
+            throw new Exception(
+                "두 번째 겉면을 찾지 못했습니다."
+            );
+        }
+
+        return result;
+    }
+
+    private static List<EntityData> FindSecondPanelLargeCircles(
+    DrawingData drawingData,
+    EntityData secondOuterPanel,
+    double wallDistance = 12.0,
+    double tolerance = 2.0
+    )
+    {
+        List<EntityData> result = new();
+
+        foreach (EntityData x in drawingData.Entities)
+        {
+            if (x.LayerName != "치구")
+            {
+                continue;
+            }
+
+            if (x.ObjectName != "CIRCLE")
+            {
+                continue;
+            }
+
+            // 원의 중심이 두 번째 겉면 안에 있어야 함
+            bool centerInside =
+                x.CenterX >= secondOuterPanel.MinX &&
+                x.CenterX <= secondOuterPanel.MaxX &&
+                x.CenterY >= secondOuterPanel.MinY &&
+                x.CenterY <= secondOuterPanel.MaxY;
+
+            if (!centerInside)
+            {
+                continue;
+            }
+
+            // 겉면 벽과 원의 바깥쪽 끝 사이 거리
+            double leftGap =
+                (x.CenterX - x.Radius) -
+                secondOuterPanel.MinX;
+
+            double rightGap =
+                secondOuterPanel.MaxX -
+                (x.CenterX + x.Radius);
+
+            double bottomGap =
+                (x.CenterY - x.Radius) -
+                secondOuterPanel.MinY;
+
+            double topGap =
+                secondOuterPanel.MaxY -
+                (x.CenterY + x.Radius);
+
+            bool nearLeft =
+                Math.Abs(leftGap - wallDistance) <= tolerance;
+
+            bool nearRight =
+                Math.Abs(rightGap - wallDistance) <= tolerance;
+
+            bool nearBottom =
+                Math.Abs(bottomGap - wallDistance) <= tolerance;
+
+            bool nearTop =
+                Math.Abs(topGap - wallDistance) <= tolerance;
+
+            // 좌우 벽 중 하나와 가깝고,
+            // 위아래 벽 중 하나와 가까워야 모서리 원
+            bool isCornerCircle =
+                (nearLeft || nearRight) &&
+                (nearTop || nearBottom);
+
+            if (!isCornerCircle)
+            {
+                continue;
+            }
+
+            result.Add(x);
+        }
+
+        // 위쪽부터, 같은 줄에서는 왼쪽부터
+        result = result
+            .OrderByDescending(x => x.CenterY)
+            .ThenBy(x => x.CenterX)
+            .ToList();
+
+        return result;
+    }
+
+    private static List<BoltHolePair> FindSecondPanelBoltHoles(
+    DrawingData drawingData,
+    EntityData secondPanel,
+    double centerTolerance = 0.001
+    )
+    {
+        List<EntityData> circles = new();
+
+        foreach (EntityData x in drawingData.Entities)
+        {
+            if (x.LayerName != "볼트 구멍")
+                continue;
+
+            if (x.ObjectName != "CIRCLE")
+                continue;
+
+            bool inside =
+                x.CenterX >= secondPanel.MinX &&
+                x.CenterX <= secondPanel.MaxX &&
+                x.CenterY >= secondPanel.MinY &&
+                x.CenterY <= secondPanel.MaxY;
+
+            if (!inside)
+                continue;
+
+            circles.Add(x);
+        }
+
+        List<BoltHolePair> result = new();
+        HashSet<string> used = new();
+
+        foreach (EntityData outer in circles)
+        {
+            if (used.Contains(outer.Handle))
+                continue;
+
+            EntityData? inner = null;
+
+            foreach (EntityData other in circles)
+            {
+                if (ReferenceEquals(outer, other))
+                    continue;
+
+                bool sameCenter =
+                    Math.Abs(outer.CenterX - other.CenterX) <= centerTolerance &&
+                    Math.Abs(outer.CenterY - other.CenterY) <= centerTolerance;
+
+                if (!sameCenter)
+                    continue;
+
+                if (other.Radius >= outer.Radius)
+                    continue;
+
+                inner = other;
+                break;
+            }
+
+            if (inner == null)
+                continue;
+
+            result.Add(new BoltHolePair
+            {
+                OuterCircle = outer,
+                InnerCircle = inner
+            });
+
+            used.Add(outer.Handle);
+            used.Add(inner.Handle);
+        }
+
+        // 위 → 아래
+        // 같은 줄에서는 왼쪽 → 오른쪽
+        result = result
+            .OrderByDescending(x => x.CenterY)
+            .ThenBy(x => x.CenterX)
+            .ToList();
+
+        return result;
+    }
+
+    private static EntityData FindSecondPanelCenterBox(
+    DrawingData drawingData,
+    EntityData secondPanel
+    )
+    {
+        EntityData? result = null;
+        double bestDistance = double.MaxValue;
+
+        foreach (EntityData x in drawingData.Entities)
+        {
+            if (x.LayerName != "볼트 구멍")
+                continue;
+
+            if (x.ObjectName != "LWPOLYLINE")
+                continue;
+
+            if (!x.IsClosed)
+                continue;
+
+            // 사각형만
+            if (x.Vertices.Count != 4)
+                continue;
+
+            // 두 번째 패널 안에 있어야 함
+            bool inside =
+                x.CenterBoxX >= secondPanel.MinX &&
+                x.CenterBoxX <= secondPanel.MaxX &&
+                x.CenterBoxY >= secondPanel.MinY &&
+                x.CenterBoxY <= secondPanel.MaxY;
+
+            if (!inside)
+                continue;
+
+            // 패널 중심과 가장 가까운 것 선택
+            double distance =
+                Math.Sqrt(
+                    Math.Pow(
+                        x.CenterBoxX - secondPanel.CenterBoxX,
+                        2
+                    ) +
+                    Math.Pow(
+                        x.CenterBoxY - secondPanel.CenterBoxY,
+                        2
+                    )
+                );
+
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                result = x;
+            }
+        }
+
+        if (result == null)
+        {
+            throw new Exception(
+                "중앙 사각 볼트 구멍을 찾지 못했습니다."
+            );
+        }
+
+        return result;
+    }
+
+    private static EntityData FindThirdOuterPanel(
+    DrawingData drawingData,
+    EntityData mainChigu,
+    EntityData secondOuterPanel,
+    double sizeTolerance = 3.0
+    )
+    {
+        EntityData? result = null;
+        double bestDistance = double.MaxValue;
+
+        foreach (EntityData x in drawingData.Entities)
+        {
+            if (x.LayerName != "치구")
+            {
+                continue;
+            }
+
+            if (x.ObjectName != "LWPOLYLINE")
+            {
+                continue;
+            }
+
+            if (!x.IsClosed)
+            {
+                continue;
+            }
+
+            // 첫 번째, 두 번째 패널 제외
+            if (ReferenceEquals(x, mainChigu) ||
+                ReferenceEquals(x, secondOuterPanel))
+            {
+                continue;
+            }
+
+            // 두 번째 패널보다 오른쪽에 있어야 함
+            if (x.CenterBoxX <= secondOuterPanel.MaxX)
+            {
+                continue;
+            }
+
+            // 메인 치구와 크기가 거의 같아야 함
+            bool sameWidth =
+                Math.Abs(x.Width - mainChigu.Width)
+                <= sizeTolerance;
+
+            bool sameHeight =
+                Math.Abs(x.Height - mainChigu.Height)
+                <= sizeTolerance;
+
+            if (!sameWidth || !sameHeight)
+            {
+                continue;
+            }
+
+            // 세로 중심도 비슷한 후보 우선
+            double yDistance =
+                Math.Abs(
+                    x.CenterBoxY -
+                    mainChigu.CenterBoxY
+                );
+
+            // 두 번째 패널 바로 다음에 있는 후보 우선
+            double xDistance =
+                x.MinX -
+                secondOuterPanel.MaxX;
+
+            double score =
+                xDistance + yDistance;
+
+            if (score < bestDistance)
+            {
+                bestDistance = score;
+                result = x;
+            }
+        }
+
+        if (result == null)
+        {
+            throw new Exception(
+                "세 번째 겉면을 찾지 못했습니다."
+            );
+        }
+
+        return result;
+    }
+
+    private static EntityData FindThirdPanelInnerBox(
+    DrawingData drawingData,
+    EntityData thirdOuterPanel
+    )
+    {
+        EntityData? result = null;
+        double bestDistance = double.MaxValue;
+
+        foreach (EntityData x in drawingData.Entities)
+        {
+            if (x.LayerName != "치구")
+            {
+                continue;
+            }
+
+            if (x.ObjectName != "LWPOLYLINE")
+            {
+                continue;
+            }
+
+            if (!x.IsClosed)
+            {
+                continue;
+            }
+
+            if (ReferenceEquals(x, thirdOuterPanel))
+            {
+                continue;
+            }
+
+            if (x.Vertices.Count != 4)
+            {
+                continue;
+            }
+
+            // 외곽보다 작아야 함
+            if (x.Width >= thirdOuterPanel.Width ||
+                x.Height >= thirdOuterPanel.Height)
+            {
+                continue;
+            }
+
+            // 내부 박스가 외곽 안에 완전히 들어가야 함
+            bool completelyInside =
+                x.MinX >= thirdOuterPanel.MinX &&
+                x.MaxX <= thirdOuterPanel.MaxX &&
+                x.MinY >= thirdOuterPanel.MinY &&
+                x.MaxY <= thirdOuterPanel.MaxY;
+
+            if (!completelyInside)
+            {
+                continue;
+            }
+
+            // 외곽 중심과 가장 가까운 박스 선택
+            double dx =
+                x.CenterBoxX -
+                thirdOuterPanel.CenterBoxX;
+
+            double dy =
+                x.CenterBoxY -
+                thirdOuterPanel.CenterBoxY;
+
+            double distance =
+                Math.Sqrt(dx * dx + dy * dy);
+
+            if (distance < bestDistance)
+            {
+                bestDistance = distance;
+                result = x;
+            }
+        }
+
+        if (result == null)
+        {
+            throw new Exception(
+                "세 번째 패널 내부 박스를 찾지 못했습니다."
+            );
+        }
+
+        return result;
+    }
+
+    private static EntityData FindFourthPanel(
+    DrawingData drawingData,
+    EntityData thirdOuterPanel
+    )
+    {
+        List<EntityData> candidates = new();
+
+        foreach (EntityData x in drawingData.Entities)
+        {
+            if (x.LayerName != "치구")
+            {
+                continue;
+            }
+
+            if (x.ObjectName != "LWPOLYLINE")
+            {
+                continue;
+            }
+
+            if (!x.IsClosed)
+            {
+                continue;
+            }
+
+            candidates.Add(x);
+        }
+
+        candidates = candidates
+            .OrderByDescending(x => x.Vertices.Count)
+            .ToList();
+
+        if (candidates.Count < 2)
+        {
+            throw new Exception(
+                "치구 LWPOLYLINE 후보가 부족합니다."
+            );
+        }
+
+        EntityData result = candidates[1];
+
+        if (result.CenterBoxX <= thirdOuterPanel.MaxX)
+        {
+            throw new Exception(
+                "꼭짓점이 두 번째로 많은 도형이 " +
+                "4번째 패널 위치에 있지 않습니다."
+            );
+        }
+
+        return result;
+    }
+
+    private static List<BoltHolePair> FindFourthPanelBoltHoles(
+    DrawingData drawingData,
+    EntityData fourthPanel,
+    double centerTolerance = 0.001
+    )
+    {
+        List<EntityData> circles = new();
+
+        // 1. 4번째 패널 안의 볼트 구멍 레이어 원만 수집
+        foreach (EntityData x in drawingData.Entities)
+        {
+            if (x.LayerName != "볼트 구멍")
+            {
+                continue;
+            }
+
+            if (x.ObjectName != "CIRCLE")
+            {
+                continue;
+            }
+
+            bool insidePanel =
+                x.CenterX >= fourthPanel.MinX &&
+                x.CenterX <= fourthPanel.MaxX &&
+                x.CenterY >= fourthPanel.MinY &&
+                x.CenterY <= fourthPanel.MaxY;
+
+            if (!insidePanel)
+            {
+                continue;
+            }
+
+            circles.Add(x);
+        }
+
+        List<BoltHolePair> result = new();
+        HashSet<string> usedHandles = new();
+
+        // 2. 중심이 같고 반지름이 다른 원 2개를 한 쌍으로 묶기
+        foreach (EntityData first in circles)
+        {
+            if (usedHandles.Contains(first.Handle))
+            {
+                continue;
+            }
+
+            EntityData? matchingCircle = null;
+
+            foreach (EntityData second in circles)
+            {
+                if (ReferenceEquals(first, second))
+                {
+                    continue;
+                }
+
+                if (usedHandles.Contains(second.Handle))
+                {
+                    continue;
+                }
+
+                bool sameCenter =
+                    Math.Abs(first.CenterX - second.CenterX)
+                        <= centerTolerance &&
+                    Math.Abs(first.CenterY - second.CenterY)
+                        <= centerTolerance;
+
+                if (!sameCenter)
+                {
+                    continue;
+                }
+
+                // 반지름까지 같으면 겹친 동일 원이므로 제외
+                if (Math.Abs(first.Radius - second.Radius)
+                    <= 0.000001)
+                {
+                    continue;
+                }
+
+                matchingCircle = second;
+                break;
+            }
+
+            if (matchingCircle == null)
+            {
+                continue;
+            }
+
+            EntityData outerCircle;
+            EntityData innerCircle;
+
+            if (first.Radius > matchingCircle.Radius)
+            {
+                outerCircle = first;
+                innerCircle = matchingCircle;
+            }
+            else
+            {
+                outerCircle = matchingCircle;
+                innerCircle = first;
+            }
+
+            result.Add(new BoltHolePair
+            {
+                OuterCircle = outerCircle,
+                InnerCircle = innerCircle
+            });
+
+            usedHandles.Add(outerCircle.Handle);
+            usedHandles.Add(innerCircle.Handle);
+        }
+
+        // 위쪽부터, 같은 높이면 왼쪽부터
+        result = result
+            .OrderByDescending(pair => pair.CenterY)
+            .ThenBy(pair => pair.CenterX)
+            .ToList();
+
+        return result;
+    }
+
+    private static EntityData FindFifthOuterPanel(
+    DrawingData drawingData,
+    EntityData mainChigu,
+    EntityData fourthPanel,
+    double expectedSizeDifference = 4.0,
+    double sizeTolerance = 2.0
+    )
+    {
+        EntityData? result = null;
+        double bestScore = double.MaxValue;
+
+        double expectedWidth =
+            mainChigu.Width - expectedSizeDifference;
+
+        double expectedHeight =
+            mainChigu.Height - expectedSizeDifference;
+
+        foreach (EntityData x in drawingData.Entities)
+        {
+            if (x.LayerName != "치구")
+            {
+                continue;
+            }
+
+            if (x.ObjectName != "LWPOLYLINE")
+            {
+                continue;
+            }
+
+            if (!x.IsClosed)
+            {
+                continue;
+            }
+
+            // 5번째는 4번째 패널보다 오른쪽에 있어야 함
+            if (x.CenterBoxX <= fourthPanel.MaxX)
+            {
+                continue;
+            }
+
+            // 기준 외곽보다 가로·세로가 약 4 작아야 함
+            double widthDifference =
+                Math.Abs(x.Width - expectedWidth);
+
+            double heightDifference =
+                Math.Abs(x.Height - expectedHeight);
+
+            if (widthDifference > sizeTolerance)
+            {
+                continue;
+            }
+
+            if (heightDifference > sizeTolerance)
+            {
+                continue;
+            }
+
+            // 세로 위치는 다른 패널들과 비슷해야 함
+            double yDistance =
+                Math.Abs(
+                    x.CenterBoxY -
+                    mainChigu.CenterBoxY
+                );
+
+            // 4번째 바로 오른쪽에 있는 후보를 우선
+            double xDistance =
+                x.MinX -
+                fourthPanel.MaxX;
+
+            double score =
+                widthDifference +
+                heightDifference +
+                yDistance +
+                xDistance;
+
+            if (score < bestScore)
+            {
+                bestScore = score;
+                result = x;
+            }
+        }
+
+        if (result == null)
+        {
+            throw new Exception(
+                "5번째 겉면을 찾지 못했습니다."
+            );
+        }
+
+        return result;
+    }
+
+    private static List<EntityData> FindFifthPanelLargeCircles(
+    DrawingData drawingData,
+    EntityData fifthOuterPanel,
+    double wallDistance = 10.0,
+    double tolerance = 2.0
+    )
+    {
+        List<EntityData> result = new();
+
+        foreach (EntityData x in drawingData.Entities)
+        {
+            // 치구 레이어의 원만 검사
+            if (x.LayerName != "치구")
+            {
+                continue;
+            }
+
+            if (x.ObjectName != "CIRCLE")
+            {
+                continue;
+            }
+
+            // 원의 중심이 5번째 패널 안에 있어야 함
+            bool centerInside =
+                x.CenterX >= fifthOuterPanel.MinX &&
+                x.CenterX <= fifthOuterPanel.MaxX &&
+                x.CenterY >= fifthOuterPanel.MinY &&
+                x.CenterY <= fifthOuterPanel.MaxY;
+
+            if (!centerInside)
+            {
+                continue;
+            }
+
+            // 패널 벽에서 원 외곽까지의 거리
+            double leftGap =
+                (x.CenterX - x.Radius) -
+                fifthOuterPanel.MinX;
+
+            double rightGap =
+                fifthOuterPanel.MaxX -
+                (x.CenterX + x.Radius);
+
+            double bottomGap =
+                (x.CenterY - x.Radius) -
+                fifthOuterPanel.MinY;
+
+            double topGap =
+                fifthOuterPanel.MaxY -
+                (x.CenterY + x.Radius);
+
+            bool nearLeft =
+                Math.Abs(leftGap - wallDistance)
+                <= tolerance;
+
+            bool nearRight =
+                Math.Abs(rightGap - wallDistance)
+                <= tolerance;
+
+            bool nearBottom =
+                Math.Abs(bottomGap - wallDistance)
+                <= tolerance;
+
+            bool nearTop =
+                Math.Abs(topGap - wallDistance)
+                <= tolerance;
+
+            // 좌우 중 한 벽, 위아래 중 한 벽과 가까워야 함
+            bool isCornerCircle =
+                (nearLeft || nearRight) &&
+                (nearTop || nearBottom);
+
+            if (!isCornerCircle)
+            {
+                continue;
+            }
+
+            result.Add(x);
+        }
+
+        // 위쪽부터, 같은 높이에서는 왼쪽부터
+        result = result
+            .OrderByDescending(x => x.CenterY)
+            .ThenBy(x => x.CenterX)
+            .ToList();
+
+        return result;
+    }
+
+    private static List<BoltHolePair> FindFifthPanelBoltHoles(
+    DrawingData drawingData,
+    EntityData fifthOuterPanel,
+    double centerTolerance = 0.001
+    )
+    {
+        List<EntityData> circles = new();
+
+        // 1. 5번째 패널 내부의 볼트 구멍 레이어 원만 수집
+        foreach (EntityData x in drawingData.Entities)
+        {
+            if (x.LayerName != "볼트 구멍")
+            {
+                continue;
+            }
+
+            if (x.ObjectName != "CIRCLE")
+            {
+                continue;
+            }
+
+            bool insidePanel =
+                x.CenterX >= fifthOuterPanel.MinX &&
+                x.CenterX <= fifthOuterPanel.MaxX &&
+                x.CenterY >= fifthOuterPanel.MinY &&
+                x.CenterY <= fifthOuterPanel.MaxY;
+
+            if (!insidePanel)
+            {
+                continue;
+            }
+
+            circles.Add(x);
+        }
+
+        List<BoltHolePair> result = new();
+        HashSet<string> usedHandles = new();
+
+        // 2. 중심이 같고 반지름이 다른 원 두 개를 한 쌍으로 묶기
+        foreach (EntityData first in circles)
+        {
+            if (usedHandles.Contains(first.Handle))
+            {
+                continue;
+            }
+
+            EntityData? matchingCircle = null;
+
+            foreach (EntityData second in circles)
+            {
+                if (ReferenceEquals(first, second))
+                {
+                    continue;
+                }
+
+                if (usedHandles.Contains(second.Handle))
+                {
+                    continue;
+                }
+
+                bool sameCenter =
+                    Math.Abs(first.CenterX - second.CenterX)
+                        <= centerTolerance &&
+                    Math.Abs(first.CenterY - second.CenterY)
+                        <= centerTolerance;
+
+                if (!sameCenter)
+                {
+                    continue;
+                }
+
+                // 반지름까지 같으면 볼트 구멍 한 쌍이 아님
+                if (Math.Abs(first.Radius - second.Radius)
+                    <= 0.000001)
+                {
+                    continue;
+                }
+
+                matchingCircle = second;
+                break;
+            }
+
+            if (matchingCircle == null)
+            {
+                continue;
+            }
+
+            EntityData outerCircle;
+            EntityData innerCircle;
+
+            if (first.Radius > matchingCircle.Radius)
+            {
+                outerCircle = first;
+                innerCircle = matchingCircle;
+            }
+            else
+            {
+                outerCircle = matchingCircle;
+                innerCircle = first;
+            }
+
+            result.Add(new BoltHolePair
+            {
+                OuterCircle = outerCircle,
+                InnerCircle = innerCircle
+            });
+
+            usedHandles.Add(outerCircle.Handle);
+            usedHandles.Add(innerCircle.Handle);
+        }
+
+        // 위쪽부터, 같은 높이면 왼쪽부터 정렬
+        result = result
+            .OrderByDescending(pair => pair.CenterY)
+            .ThenBy(pair => pair.CenterX)
+            .ToList();
+
+        return result;
+    }
+
+    private static EntityData FindSixthOuterPanel(
+    DrawingData drawingData,
+    EntityData mainChigu,
+    EntityData fifthOuterPanel,
+    double sizeTolerance = 2.0
+    )
+    {
+        EntityData? result = null;
+        double bestScore = double.MaxValue;
+
+        foreach (EntityData x in drawingData.Entities)
+        {
+            if (x.LayerName != "치구")
+                continue;
+
+            if (x.ObjectName != "LWPOLYLINE")
+                continue;
+
+            if (!x.IsClosed)
+                continue;
+
+            // 5번째보다 오른쪽
+            if (x.CenterBoxX <= fifthOuterPanel.MaxX)
+                continue;
+
+            // 메인과 같은 크기
+            if (Math.Abs(x.Width - mainChigu.Width) > sizeTolerance)
+                continue;
+
+            if (Math.Abs(x.Height - mainChigu.Height) > sizeTolerance)
+                continue;
+
+            double score =
+                Math.Abs(x.CenterBoxY - mainChigu.CenterBoxY) +
+                (x.MinX - fifthOuterPanel.MaxX);
+
+            if (score < bestScore)
+            {
+                bestScore = score;
+                result = x;
+            }
+        }
+
+        if (result == null)
+        {
+            throw new Exception("6번째 겉면을 찾지 못했습니다.");
+        }
+
+        return result;
+    }
+
+    private static List<BoltHolePair> FindSixthPanelBoltHoles(
+    DrawingData drawingData,
+    EntityData sixthOuterPanel,
+    double centerTolerance = 0.001
+    )
+    {
+        List<EntityData> circles = new();
+
+        // 1. 6번째 패널 내부의 볼트 구멍 원만 수집
+        foreach (EntityData x in drawingData.Entities)
+        {
+            if (x.LayerName != "볼트 구멍")
+            {
+                continue;
+            }
+
+            if (x.ObjectName != "CIRCLE")
+            {
+                continue;
+            }
+
+            bool insidePanel =
+                x.CenterX >= sixthOuterPanel.MinX &&
+                x.CenterX <= sixthOuterPanel.MaxX &&
+                x.CenterY >= sixthOuterPanel.MinY &&
+                x.CenterY <= sixthOuterPanel.MaxY;
+
+            if (!insidePanel)
+            {
+                continue;
+            }
+
+            circles.Add(x);
+        }
+
+        List<BoltHolePair> result = new();
+        HashSet<string> usedHandles = new();
+
+        // 2. 중심이 같고 반지름이 다른 원 두 개를 한 쌍으로 묶기
+        foreach (EntityData first in circles)
+        {
+            if (usedHandles.Contains(first.Handle))
+            {
+                continue;
+            }
+
+            EntityData? matchingCircle = null;
+
+            foreach (EntityData second in circles)
+            {
+                if (ReferenceEquals(first, second))
+                {
+                    continue;
+                }
+
+                if (usedHandles.Contains(second.Handle))
+                {
+                    continue;
+                }
+
+                bool sameCenter =
+                    Math.Abs(first.CenterX - second.CenterX)
+                        <= centerTolerance &&
+                    Math.Abs(first.CenterY - second.CenterY)
+                        <= centerTolerance;
+
+                if (!sameCenter)
+                {
+                    continue;
+                }
+
+                // 반지름까지 같으면 제외
+                if (Math.Abs(first.Radius - second.Radius)
+                    <= 0.000001)
+                {
+                    continue;
+                }
+
+                matchingCircle = second;
+                break;
+            }
+
+            if (matchingCircle == null)
+            {
+                continue;
+            }
+
+            EntityData outerCircle;
+            EntityData innerCircle;
+
+            if (first.Radius > matchingCircle.Radius)
+            {
+                outerCircle = first;
+                innerCircle = matchingCircle;
+            }
+            else
+            {
+                outerCircle = matchingCircle;
+                innerCircle = first;
+            }
+
+            result.Add(new BoltHolePair
+            {
+                OuterCircle = outerCircle,
+                InnerCircle = innerCircle
+            });
+
+            usedHandles.Add(outerCircle.Handle);
+            usedHandles.Add(innerCircle.Handle);
+        }
+
+        // 위쪽부터, 같은 높이면 왼쪽부터 정렬
+        result = result
+            .OrderByDescending(pair => pair.CenterY)
+            .ThenBy(pair => pair.CenterX)
+            .ToList();
+
+        return result;
+    }
+
+    private static ResizeInput? ShowResizeInputDialog(
+        EntityData mainChigu,
+        double currentDepth
+    )
+    {
+        double baseWidth = mainChigu.Width + 0.7;
+        double baseHeight = mainChigu.Height + 0.7;
+        double baseDepth = currentDepth + 15.0;
+
+        using Form form = new()
+        {
+            Text = "수정할 크기 입력",
+            Width = 390,
+            Height = 310,
+            StartPosition = FormStartPosition.CenterScreen,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false
+        };
+
+        Label currentLabel = new()
+        {
+            Left = 25,
+            Top = 20,
+            Width = 330,
+            Height = 35,
+            Text =
+                $"현재 크기: " +
+                $"{baseWidth:0.###} x " +
+                $"{baseHeight:0.###} x " +
+                $"{baseDepth:0.###}"
+        };
+
+        Label widthLabel = new()
+        {
+            Left = 25,
+            Top = 75,
+            Width = 100,
+            Text = "목표 가로"
+        };
+
+        NumericUpDown widthInput = CreateSizeInput(
+            140,
+            70,
+            baseWidth
+        );
+
+        Label heightLabel = new()
+        {
+            Left = 25,
+            Top = 115,
+            Width = 100,
+            Text = "목표 세로"
+        };
+
+        NumericUpDown heightInput = CreateSizeInput(
+            140,
+            110,
+            baseHeight
+        );
+
+        Label depthLabel = new()
+        {
+            Left = 25,
+            Top = 155,
+            Width = 100,
+            Text = "목표 두께"
+        };
+
+        NumericUpDown depthInput = CreateSizeInput(
+            140,
+            150,
+            baseDepth
+        );
+
+        Button okButton = new()
+        {
+            Left = 140,
+            Top = 215,
+            Width = 90,
+            Height = 32,
+            Text = "확인",
+            DialogResult = DialogResult.OK
+        };
+
+        Button cancelButton = new()
+        {
+            Left = 240,
+            Top = 215,
+            Width = 90,
+            Height = 32,
+            Text = "취소",
+            DialogResult = DialogResult.Cancel
+        };
+
+        form.Controls.AddRange(
+        [
+            currentLabel,
+            widthLabel,
+            widthInput,
+            heightLabel,
+            heightInput,
+            depthLabel,
+            depthInput,
+            okButton,
+            cancelButton
+        ]);
+
+        form.AcceptButton = okButton;
+        form.CancelButton = cancelButton;
+
+        if (form.ShowDialog() != DialogResult.OK)
+        {
+            return null;
+        }
+
+        double targetWidth =
+            (double)widthInput.Value;
+
+        double targetHeight =
+            (double)heightInput.Value;
+
+        double targetDepth =
+            (double)depthInput.Value;
+
+        return new ResizeInput
+        {
+            TargetWidth = targetWidth,
+            TargetHeight = targetHeight,
+            TargetDepth = targetDepth,
+
+            WidthDelta = targetWidth - baseWidth,
+            HeightDelta = targetHeight - baseHeight,
+            DepthDelta = targetDepth - baseDepth,
+        };
+    }
+
+    private static NumericUpDown CreateSizeInput(
+    int left,
+    int top,
+    double currentValue
+    )
+    {
+        decimal safeValue =
+            (decimal)Math.Clamp(
+                currentValue,
+                0.001,
+                1000000.0
+            );
+
+        return new NumericUpDown
+        {
+            Left = left,
+            Top = top,
+            Width = 190,
+            DecimalPlaces = 3,
+            Minimum = 0.001m,
+            Maximum = 1000000m,
+            Increment = 1m,
+            Value = safeValue
+        };
     }
 }
