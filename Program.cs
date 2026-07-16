@@ -1,10 +1,12 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Windows.Forms;
 using ACadSharp;
 using ACadSharp.Entities;
 using ACadSharp.IO;
+using CSMath;
 
 namespace DwgAutoResize;
 
@@ -516,14 +518,168 @@ internal static class Program
             return;
         }
 
-        double halfWidthDelta =
-            resizeInput.WidthDelta / 2.0;
+        double widthDelta = resizeInput.WidthDelta;
+        double heightDelta = resizeInput.HeightDelta;
+        double depthDelta = resizeInput.DepthDelta;
 
-        double halfHeightDelta =
-            resizeInput.HeightDelta / 2.0;
+        // 크기 수정 후에도 각 판의 내부 객체를 함께 이동할 수 있도록
+        // 수정 전 위치를 기준으로 패널별 객체 묶음을 먼저 만든다.
+        List<EntityData> firstPanelGroup = new()
+        {
+            mainChigu,
+            topPlate,
+            bottomPlate,
+            leftPlate,
+            rightPlate
+        };
+        firstPanelGroup.AddRange(topRedBlocks);
+        firstPanelGroup.AddRange(bottomRedBlocks);
+        firstPanelGroup.AddRange(largeCircles);
+        firstPanelGroup.AddRange(GetBoltHoleEntities(centerBoltHoles));
 
-        double halfDepthDelta =
-            resizeInput.DepthDelta / 2.0;
+        List<EntityData> secondPanelGroup =
+            GetEntitiesInsidePanel(drawingData, secondOuterPanel);
+
+        List<EntityData> thirdPanelGroup =
+            GetEntitiesInsidePanel(drawingData, thirdOuterPanel);
+
+        List<EntityData> fourthPanelGroup =
+            GetEntitiesInsidePanel(drawingData, fourthPanel);
+
+        List<EntityData> fifthPanelGroup =
+            GetEntitiesInsidePanel(drawingData, fifthOuterPanel);
+
+        List<EntityData> sixthPanelGroup =
+            GetEntitiesInsidePanel(drawingData, sixthOuterPanel);
+
+        // 실제 도형 크기 수정
+        // "볼트 구멍" 레이어 객체는 수정 함수에 넘기지 않으므로
+        // 크기와 위치가 모두 그대로 유지된다.
+        ResizePolylineFromCenter(mainChigu, widthDelta, heightDelta);
+
+        ResizePolylineFromCenter(topPlate, widthDelta, depthDelta);
+        ResizePolylineFromCenter(bottomPlate, widthDelta, depthDelta);
+        ResizePolylineFromCenter(leftPlate, depthDelta, heightDelta);
+        ResizePolylineFromCenter(rightPlate, depthDelta, heightDelta);
+
+        ResizePlateBlocks(
+            topRedBlocks,
+            mainChigu.CenterBoxX,
+            widthDelta,
+            depthDelta
+        );
+
+        ResizePlateBlocks(
+            bottomRedBlocks,
+            mainChigu.CenterBoxX,
+            widthDelta,
+            depthDelta
+        );
+
+        MoveCornerCircles(
+            largeCircles,
+            mainChigu,
+            widthDelta,
+            heightDelta
+        );
+
+        ResizePolylineFromCenter(
+            secondOuterPanel,
+            widthDelta,
+            heightDelta
+        );
+
+        MoveCornerCircles(
+            secondPanelCircles,
+            secondOuterPanel,
+            widthDelta,
+            heightDelta
+        );
+
+        ResizePolylineFromCenter(
+            thirdOuterPanel,
+            widthDelta,
+            heightDelta
+        );
+
+        ResizePolylineFromCenter(
+            thirdInnerBox,
+            widthDelta,
+            heightDelta
+        );
+
+        ResizePolylineFromCenter(
+            fourthPanel,
+            widthDelta,
+            heightDelta
+        );
+
+        ResizePolylineFromCenter(
+            fifthOuterPanel,
+            widthDelta,
+            heightDelta
+        );
+
+        MoveCornerCircles(
+            fifthPanelCircles,
+            fifthOuterPanel,
+            widthDelta,
+            heightDelta
+        );
+
+        ResizePolylineFromCenter(
+            sixthOuterPanel,
+            widthDelta,
+            heightDelta
+        );
+
+        // 첫 번째 조립 치구는 현재 위치에 고정하고,
+        // 2~6번째 패널을 순서대로 재배치하여 서로 20 간격을 유지한다.
+        ArrangePanelGroupsWithGap(
+            new List<List<EntityData>>
+            {
+                firstPanelGroup,
+                secondPanelGroup,
+                thirdPanelGroup,
+                fourthPanelGroup,
+                fifthPanelGroup,
+                sixthPanelGroup
+            },
+            20.0
+        );
+
+        foreach (var dim in document.Entities
+            .OfType<Dimension>()
+            .ToList())
+        {
+            document.Entities.Remove(dim);
+        }
+
+        // 수정 결과를 새 DWG로 저장
+        string directory =
+            Path.GetDirectoryName(dwgPath)!;
+
+        string fileName =
+            Path.GetFileNameWithoutExtension(dwgPath);
+
+        string outputPath = Path.Combine(
+            directory,
+            $"{fileName}_{resizeInput.TargetWidth:0.###}x" +
+            $"{resizeInput.TargetHeight:0.###}x" +
+            $"{resizeInput.TargetDepth:0.###}.dwg"
+        );
+
+        SaveAsNewDwg(
+            document,
+            outputPath
+        );
+
+        MessageBox.Show(
+            $"수정 완료\n\n{outputPath}",
+            "완료",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Information
+        );
 
                     }
         catch (Exception ex)
@@ -2536,6 +2692,438 @@ internal static class Program
             .ToList();
 
         return result;
+    }
+
+
+    /// <summary>
+    /// LWPOLYLINE을 기존 중심 기준으로 확대/축소한다.
+    /// 가로 50 증가 시 왼쪽 꼭짓점은 -25, 오른쪽 꼭짓점은 +25 이동한다.
+    /// </summary>
+    private static void ResizePolylineFromCenter(
+        EntityData data,
+        double widthDelta,
+        double heightDelta
+    )
+    {
+        if (data.Entity is not LwPolyline polyline)
+        {
+            throw new Exception(
+                $"Handle={data.Handle} 객체가 LWPOLYLINE이 아닙니다."
+            );
+        }
+
+        double halfWidthDelta = widthDelta / 2.0;
+        double halfHeightDelta = heightDelta / 2.0;
+
+        double centerX = data.CenterBoxX;
+        double centerY = data.CenterBoxY;
+
+        const double tolerance = 0.000001;
+
+        foreach (var vertex in polyline.Vertices)
+        {
+            double x = vertex.Location.X;
+            double y = vertex.Location.Y;
+
+            if (x < centerX - tolerance)
+            {
+                x -= halfWidthDelta;
+            }
+            else if (x > centerX + tolerance)
+            {
+                x += halfWidthDelta;
+            }
+
+            if (y < centerY - tolerance)
+            {
+                y -= halfHeightDelta;
+            }
+            else if (y > centerY + tolerance)
+            {
+                y += halfHeightDelta;
+            }
+
+            vertex.Location = new XY(
+                x,
+                y
+            );
+        }
+    }
+
+    /// <summary>
+    /// 패널 모서리의 치구 레이어 큰 원은 크기를 유지하고
+    /// 패널 확대량의 절반만큼 바깥쪽으로 이동한다.
+    /// 볼트 구멍 레이어 원은 이 함수에 전달하지 않는다.
+    /// </summary>
+    private static void MoveCornerCircles(
+        List<EntityData> circles,
+        EntityData originalPanel,
+        double widthDelta,
+        double heightDelta
+    )
+    {
+        double halfWidthDelta = widthDelta / 2.0;
+        double halfHeightDelta = heightDelta / 2.0;
+
+        foreach (EntityData circleData in circles)
+        {
+            if (circleData.Entity is not Circle circle)
+            {
+                continue;
+            }
+
+            double x = circle.Center.X;
+            double y = circle.Center.Y;
+
+            if (circleData.CenterX < originalPanel.CenterBoxX)
+            {
+                x -= halfWidthDelta;
+            }
+            else if (circleData.CenterX > originalPanel.CenterBoxX)
+            {
+                x += halfWidthDelta;
+            }
+
+            if (circleData.CenterY < originalPanel.CenterBoxY)
+            {
+                y -= halfHeightDelta;
+            }
+            else if (circleData.CenterY > originalPanel.CenterBoxY)
+            {
+                y += halfHeightDelta;
+            }
+
+            circle.Center = new XYZ(
+                x,
+                y,
+                circle.Center.Z
+            );
+        }
+    }
+
+    /// <summary>
+    /// 위/아래 긴 판 안의 작은 블록을 두께 방향으로 확대하고,
+    /// 메인 치구 가로 변화량의 절반만큼 좌우로 이동한다.
+    /// </summary>
+    private static void ResizePlateBlocks(
+        List<EntityData> blocks,
+        double mainCenterX,
+        double widthDelta,
+        double depthDelta
+    )
+    {
+        double halfWidthDelta = widthDelta / 2.0;
+
+        foreach (EntityData block in blocks)
+        {
+            ResizePolylineFromCenter(
+                block,
+                0.0,
+                depthDelta
+            );
+
+            if (block.Entity is not LwPolyline polyline)
+            {
+                continue;
+            }
+
+            double moveX = 0.0;
+
+            if (block.CenterBoxX < mainCenterX)
+            {
+                moveX = -halfWidthDelta;
+            }
+            else if (block.CenterBoxX > mainCenterX)
+            {
+                moveX = halfWidthDelta;
+            }
+
+            foreach (var vertex in polyline.Vertices)
+            {
+                vertex.Location = new XY(
+                    vertex.Location.X + moveX,
+                    vertex.Location.Y
+                );
+            }
+        }
+    }
+
+    /// <summary>
+    /// 볼트 구멍 쌍 목록을 실제 원 객체 목록으로 펼친다.
+    /// </summary>
+    private static IEnumerable<EntityData> GetBoltHoleEntities(
+        IEnumerable<BoltHolePair> boltHoles
+    )
+    {
+        foreach (BoltHolePair pair in boltHoles)
+        {
+            yield return pair.OuterCircle;
+            yield return pair.InnerCircle;
+        }
+    }
+
+    /// <summary>
+    /// 패널의 수정 전 외곽 범위 안에 중심이 있는 모든 객체를 하나의 묶음으로 만든다.
+    /// 외곽, 볼트 구멍, 원, 내부 박스, TEXT 등이 함께 포함된다.
+    /// </summary>
+    private static List<EntityData> GetEntitiesInsidePanel(
+        DrawingData drawingData,
+        EntityData panel,
+        double tolerance = 0.001
+    )
+    {
+        List<EntityData> result = new();
+
+        foreach (EntityData entity in drawingData.Entities)
+        {
+            if (ReferenceEquals(entity, panel))
+            {
+                result.Add(entity);
+                continue;
+            }
+
+            double centerX = entity.CenterBoxX;
+            double centerY = entity.CenterBoxY;
+
+            // 원은 CenterBox 값 대신 실제 원 중심값이 더 확실하다.
+            if (entity.ObjectName == "CIRCLE")
+            {
+                centerX = entity.CenterX;
+                centerY = entity.CenterY;
+            }
+            else if (entity.ObjectName == "TEXT" ||
+                     entity.ObjectName == "MTEXT")
+            {
+                centerX = entity.InsertX;
+                centerY = entity.InsertY;
+            }
+
+            bool inside =
+                centerX >= panel.MinX - tolerance &&
+                centerX <= panel.MaxX + tolerance &&
+                centerY >= panel.MinY - tolerance &&
+                centerY <= panel.MaxY + tolerance;
+
+            if (inside)
+            {
+                result.Add(entity);
+            }
+        }
+
+        return result
+            .GroupBy(x => x.Handle)
+            .Select(group => group.First())
+            .ToList();
+    }
+
+    /// <summary>
+    /// 객체 하나를 지정한 거리만큼 이동한다.
+    /// 크기나 반지름은 바꾸지 않는다.
+    /// </summary>
+    private static void MoveEntity(
+        EntityData data,
+        double moveX,
+        double moveY
+    )
+    {
+        switch (data.Entity)
+        {
+            case LwPolyline polyline:
+                foreach (var vertex in polyline.Vertices)
+                {
+                    vertex.Location = new XY(
+                        vertex.Location.X + moveX,
+                        vertex.Location.Y + moveY
+                    );
+                }
+                break;
+
+            case Polyline2D polyline:
+                foreach (var vertex in polyline.Vertices)
+                {
+                    vertex.Location = new XYZ(
+                        vertex.Location.X + moveX,
+                        vertex.Location.Y + moveY,
+                        vertex.Location.Z
+                    );
+                }
+                break;
+            
+            case Arc arc:
+                arc.Center = new XYZ(
+                    arc.Center.X + moveX,
+                    arc.Center.Y + moveY,
+                    arc.Center.Z
+                );
+                break;
+
+            case Circle circle:
+                circle.Center = new XYZ(
+                    circle.Center.X + moveX,
+                    circle.Center.Y + moveY,
+                    circle.Center.Z
+                );
+                break;            
+
+            case Line line:
+                line.StartPoint = new XYZ(
+                    line.StartPoint.X + moveX,
+                    line.StartPoint.Y + moveY,
+                    line.StartPoint.Z
+                );
+
+                line.EndPoint = new XYZ(
+                    line.EndPoint.X + moveX,
+                    line.EndPoint.Y + moveY,
+                    line.EndPoint.Z
+                );
+                break;
+
+            case TextEntity text:
+                text.InsertPoint = new XYZ(
+                    text.InsertPoint.X + moveX,
+                    text.InsertPoint.Y + moveY,
+                    text.InsertPoint.Z
+                );
+                break;
+
+            case MText mtext:
+                mtext.InsertPoint = new XYZ(
+                    mtext.InsertPoint.X + moveX,
+                    mtext.InsertPoint.Y + moveY,
+                    mtext.InsertPoint.Z
+                );
+                break;
+
+            case Insert insert:
+                insert.InsertPoint = new XYZ(
+                    insert.InsertPoint.X + moveX,
+                    insert.InsertPoint.Y + moveY,
+                    insert.InsertPoint.Z
+                );
+                break;
+        }
+    }
+
+    /// <summary>
+    /// 패널에 포함된 모든 객체를 같은 거리만큼 이동한다.
+    /// Handle이 중복된 객체는 한 번만 이동한다.
+    /// </summary>
+    private static void MoveEntityGroup(
+        IEnumerable<EntityData> entities,
+        double moveX,
+        double moveY
+    )
+    {
+        foreach (EntityData entity in entities
+            .GroupBy(x => x.Handle)
+            .Select(group => group.First()))
+        {
+            MoveEntity(entity, moveX, moveY);
+        }
+    }
+
+    /// <summary>
+    /// 현재 수정된 실제 CAD 객체에서 묶음 전체의 바운딩 박스를 다시 계산한다.
+    /// EntityData의 MinX/MaxX는 수정 전 값이므로 사용하지 않는다.
+    /// </summary>
+    private static (
+        double MinX,
+        double MinY,
+        double MaxX,
+        double MaxY
+    ) GetGroupBounds(
+        IEnumerable<EntityData> entities
+    )
+    {
+        double minX = double.MaxValue;
+        double minY = double.MaxValue;
+        double maxX = double.MinValue;
+        double maxY = double.MinValue;
+        bool found = false;
+
+        foreach (EntityData entity in entities
+            .GroupBy(x => x.Handle)
+            .Select(group => group.First()))
+        {
+            try
+            {
+                var box = entity.Entity.GetBoundingBox();
+
+                minX = Math.Min(minX, box.Min.X);
+                minY = Math.Min(minY, box.Min.Y);
+                maxX = Math.Max(maxX, box.Max.X);
+                maxY = Math.Max(maxY, box.Max.Y);
+                found = true;
+            }
+            catch
+            {
+                // 바운딩 박스를 지원하지 않는 객체는 간격 계산에서 제외한다.
+            }
+        }
+
+        if (!found)
+        {
+            throw new Exception(
+                "패널 묶음의 현재 범위를 계산하지 못했습니다."
+            );
+        }
+
+        return (minX, minY, maxX, maxY);
+    }
+
+    /// <summary>
+    /// 첫 번째 패널 묶음은 고정하고 나머지 패널 묶음을 오른쪽으로 재배치한다.
+    /// 이전 묶음의 오른쪽 끝과 다음 묶음의 왼쪽 끝 사이가 정확히 gap이 된다.
+    /// </summary>
+    private static void ArrangePanelGroupsWithGap(
+        List<List<EntityData>> panelGroups,
+        double gap
+    )
+    {
+        if (panelGroups.Count < 2)
+        {
+            return;
+        }
+
+        var previousBounds = GetGroupBounds(panelGroups[0]);
+
+        for (int i = 1; i < panelGroups.Count; i++)
+        {
+            var currentBounds = GetGroupBounds(panelGroups[i]);
+
+            double targetMinX = previousBounds.MaxX + gap;
+            double moveX = targetMinX - currentBounds.MinX;
+
+            MoveEntityGroup(
+                panelGroups[i],
+                moveX,
+                0.0
+            );
+
+            previousBounds = GetGroupBounds(panelGroups[i]);
+        }
+    }
+
+    /// <summary>
+    /// 수정된 CadDocument를 새 DWG 파일로 저장한다.
+    /// </summary>
+    private static void SaveAsNewDwg(
+        CadDocument document,
+        string outputPath
+    )
+    {
+        if (File.Exists(outputPath))
+        {
+            File.Delete(outputPath);
+        }
+
+        using DwgWriter writer = new(
+            outputPath,
+            document
+        );
+
+        writer.Write();
     }
 
     private static ResizeInput? ShowResizeInputDialog(
