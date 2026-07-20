@@ -30,6 +30,23 @@ internal static class Program
             // 문서 전체 정보는 document 안에 그대로 들어 있다.
             DrawingData drawingData = ReadDrawingData(document);
 
+            string reportDirectory =
+                Path.GetDirectoryName(dwgPath)!;
+
+            string reportName =
+                Path.GetFileNameWithoutExtension(dwgPath);
+
+            string reportPath =
+                Path.Combine(
+                    reportDirectory,
+                    $"{reportName}_objects.txt"
+                );
+
+            SaveEntityReport(
+                drawingData,
+                reportPath
+            );
+
             //--------------------------------압축치구--------------------------------
 
             EntityData mainChigu = FindMainChigu(drawingData);
@@ -81,29 +98,23 @@ internal static class Program
                 );
             EntityData topLeftCircle =
                 largeCircles[0];
+            Console.WriteLine("1");
 
             EntityData topRightCircle =
                 largeCircles[1];
-
+            Console.WriteLine("2");
             EntityData bottomLeftCircle =
                 largeCircles[2];
-
+            Console.WriteLine("3");
             EntityData bottomRightCircle =
                 largeCircles[3];
-
+            Console.WriteLine("4");
             List<BoltHolePair> centerBoltHoles =
                 FindCenterBoltHoles(
                     drawingData,
                     mainChigu
                 );
-
-            BoltHolePair leftCenterBolt =
-                centerBoltHoles[0];
-
-            BoltHolePair rightCenterBolt =
-                centerBoltHoles[1];
-
-            
+            Console.WriteLine("5");
 
             // foreach (BoltHolePair pair in centerBoltHoles)
             // {
@@ -221,6 +232,7 @@ internal static class Program
                     mainChigu,
                     3.0
                 );
+                Console.WriteLine("6");
 
             List<EntityData> secondPanelCircles =
                 FindSecondPanelLargeCircles(
@@ -229,36 +241,44 @@ internal static class Program
                     12.0,
                     2.0
                 );
+                Console.WriteLine("7");
 
             EntityData secondTopLeftCircle =
                 secondPanelCircles[0];
+                Console.WriteLine("8");
 
             EntityData secondTopRightCircle =
                 secondPanelCircles[1];
+                Console.WriteLine("9");
 
             EntityData secondBottomLeftCircle =
                 secondPanelCircles[2];
+                Console.WriteLine("10");
 
             EntityData secondBottomRightCircle =
                 secondPanelCircles[3];
+                Console.WriteLine("11");
 
             List<BoltHolePair> boltHoles =
                 FindSecondPanelBoltHoles(
                     drawingData,
                     secondOuterPanel
                 );
-
-            BoltHolePair topLeft = boltHoles[0];
-            BoltHolePair topRight = boltHoles[1];
-            BoltHolePair bottomLeft = boltHoles[2];
-            BoltHolePair bottomRight = boltHoles[3];
+                Console.WriteLine("12");
 
             EntityData centerBox =
                 FindSecondPanelCenterBox(
                     drawingData,
                     secondOuterPanel
                 );
+                Console.WriteLine("13");
 
+            List<BoltHolePair> secondPanelBoltHoles =
+                FindBoltHolesInsidePanel(
+                    drawingData,
+                    secondOuterPanel
+                );
+                Console.WriteLine("14");
                      
 
             // Console.WriteLine("두 번째 겉면");
@@ -316,12 +336,14 @@ internal static class Program
                     secondOuterPanel,
                     3.0
                 );
+                Console.WriteLine("15");
 
             EntityData thirdInnerBox =
                 FindThirdPanelInnerBox(
                     drawingData,
                     thirdOuterPanel
                 );   
+                Console.WriteLine("16");
             
             // Console.WriteLine("세 번째 겉면");
             // Console.WriteLine($"Handle={thirdOuterPanel.Handle}");
@@ -348,17 +370,29 @@ internal static class Program
             //--------------------------------중간치구벽--------------------------------
             //--------------------------------안쪽 중판--------------------------------
 
-            EntityData fourthPanel =
-                FindFourthPanel(
+            EntityData? fourthPanel =
+                FindFourthPanelOptional(
                     drawingData,
                     thirdOuterPanel
                 );
 
-            List<BoltHolePair> fourthBoltHoles =
-                FindFourthPanelBoltHoles(
+            List<BoltHolePair> fourthBoltHoles = new();
+
+            if (fourthPanel != null)
+            {
+                fourthBoltHoles =
+                    FindBoltHolesInsidePanel(
+                        drawingData,
+                        fourthPanel
+                    );
+            }
+
+            List<BoltHolePair> fourthPanelBoltHoles =
+                FindBoltHolesInsidePanel(
                     drawingData,
                     fourthPanel
                 );
+            Console.WriteLine("16");
 
             // Console.WriteLine("4번째 패널");
             // Console.WriteLine($"Handle={fourthPanel.Handle}");
@@ -389,6 +423,9 @@ internal static class Program
             // }
             //--------------------------------안쪽 중판--------------------------------
             //--------------------------------밖쪽 중판--------------------------------
+            EntityData panelBeforeFifth =
+                fourthPanel ?? thirdOuterPanel;
+
             EntityData fifthOuterPanel =
                 FindFifthOuterPanel(
                     drawingData,
@@ -415,24 +452,14 @@ internal static class Program
 
             EntityData fifthBottomRight =
                 fifthPanelCircles[3];
-
+            
             List<BoltHolePair> fifthPanelBoltHoles =
-                FindFifthPanelBoltHoles(
+                FindBoltHolesInsidePanel(
                     drawingData,
                     fifthOuterPanel
                 );
+
             
-            BoltHolePair fifthTopLeftBolt =
-                fifthPanelBoltHoles[0];
-
-            BoltHolePair fifthTopRightBolt =
-                fifthPanelBoltHoles[1];
-
-            BoltHolePair fifthBottomLeftBolt =
-                fifthPanelBoltHoles[2];
-
-            BoltHolePair fifthBottomRightBolt =
-                fifthPanelBoltHoles[3];
 
             // Console.WriteLine("5번째 겉면");
             // Console.WriteLine(
@@ -477,13 +504,13 @@ internal static class Program
                     mainChigu,
                     fifthOuterPanel
                 );
-
+            
             List<BoltHolePair> sixthPanelBoltHoles =
-                FindSixthPanelBoltHoles(
+                FindBoltHolesInsidePanel(
                     drawingData,
                     sixthOuterPanel
                 );
-            
+
             // Console.WriteLine("6번째 패널");
             // Console.WriteLine($"Handle={sixthOuterPanel.Handle}");
             // Console.WriteLine($"Center=({sixthOuterPanel.CenterBoxX}, {sixthOuterPanel.CenterBoxY})");
@@ -1170,10 +1197,10 @@ internal static class Program
                 continue;
 
             // 메인 치구와 세로 크기가 비슷해야 함
-            if (x.Height < mainChigu.Height * 0.7)
+            if (x.Height < mainChigu.Height * 0.6)
                 continue;
 
-            if (x.Height > mainChigu.Height * 1.3)
+            if (x.Height > mainChigu.Height * 1.4)
                 continue;
 
             // 메인 치구 중심과 Y 위치가 비슷한 것 우선
@@ -1232,10 +1259,10 @@ internal static class Program
                 continue;
 
             // 메인 치구와 세로 크기가 비슷해야 함
-            if (x.Height < mainChigu.Height * 0.7)
+            if (x.Height < mainChigu.Height * 0.6)
                 continue;
 
-            if (x.Height > mainChigu.Height * 1.3)
+            if (x.Height > mainChigu.Height * 1.4)
                 continue;
 
             // 메인 치구 중심과 Y 위치가 비슷한 것 우선
@@ -1829,41 +1856,66 @@ internal static class Program
 
         foreach (EntityData x in drawingData.Entities)
         {
-            if (x.LayerName != "볼트 구멍")
+            // 볼트 구멍 레이어 또는 도면층이 비어 있는 객체.
+            // AutoCAD 기본 도면층 "0"도 빈 도면층처럼 취급한다.
+            bool allowedLayer =
+                x.LayerName == "볼트 구멍" ||
+                string.IsNullOrWhiteSpace(x.LayerName) ||
+                x.LayerName == "0";
+
+            if (!allowedLayer)
+            {
                 continue;
+            }
 
             if (x.ObjectName != "LWPOLYLINE")
+            {
                 continue;
+            }
 
             if (!x.IsClosed)
+            {
                 continue;
+            }
 
-            // 사각형만
             if (x.Vertices.Count != 4)
+            {
                 continue;
+            }
 
-            // 두 번째 패널 안에 있어야 함
-            bool inside =
-                x.CenterBoxX >= secondPanel.MinX &&
-                x.CenterBoxX <= secondPanel.MaxX &&
-                x.CenterBoxY >= secondPanel.MinY &&
-                x.CenterBoxY <= secondPanel.MaxY;
-
-            if (!inside)
+            if (ReferenceEquals(x, secondPanel))
+            {
                 continue;
+            }
 
-            // 패널 중심과 가장 가까운 것 선택
+            // 패널 외곽보다 작은 도형만 허용
+            if (x.Width >= secondPanel.Width ||
+                x.Height >= secondPanel.Height)
+            {
+                continue;
+            }
+
+            // 박스 전체가 두 번째 패널 내부에 있어야 함
+            bool completelyInside =
+                x.MinX >= secondPanel.MinX &&
+                x.MaxX <= secondPanel.MaxX &&
+                x.MinY >= secondPanel.MinY &&
+                x.MaxY <= secondPanel.MaxY;
+
+            if (!completelyInside)
+            {
+                continue;
+            }
+
+            // 패널 중앙에 가장 가까운 사각형 선택
+            double dx =
+                x.CenterBoxX - secondPanel.CenterBoxX;
+
+            double dy =
+                x.CenterBoxY - secondPanel.CenterBoxY;
+
             double distance =
-                Math.Sqrt(
-                    Math.Pow(
-                        x.CenterBoxX - secondPanel.CenterBoxX,
-                        2
-                    ) +
-                    Math.Pow(
-                        x.CenterBoxY - secondPanel.CenterBoxY,
-                        2
-                    )
-                );
+                Math.Sqrt(dx * dx + dy * dy);
 
             if (distance < bestDistance)
             {
@@ -1875,7 +1927,7 @@ internal static class Program
         if (result == null)
         {
             throw new Exception(
-                "중앙 사각 볼트 구멍을 찾지 못했습니다."
+                "두 번째 패널 중앙 박스를 찾지 못했습니다."
             );
         }
 
@@ -2051,56 +2103,75 @@ internal static class Program
         return result;
     }
 
-    private static EntityData FindFourthPanel(
+    private static EntityData? FindFourthPanelOptional(
     DrawingData drawingData,
     EntityData thirdOuterPanel
-    )
+)
+{
+    List<EntityData> candidates = new();
+
+    foreach (EntityData x in drawingData.Entities)
     {
-        List<EntityData> candidates = new();
-
-        foreach (EntityData x in drawingData.Entities)
+        if (x.LayerName != "치구")
         {
-            if (x.LayerName != "치구")
-            {
-                continue;
-            }
-
-            if (x.ObjectName != "LWPOLYLINE")
-            {
-                continue;
-            }
-
-            if (!x.IsClosed)
-            {
-                continue;
-            }
-
-            candidates.Add(x);
+            continue;
         }
 
-        candidates = candidates
-            .OrderByDescending(x => x.Vertices.Count)
-            .ToList();
-
-        if (candidates.Count < 2)
+        if (x.ObjectName != "LWPOLYLINE")
         {
-            throw new Exception(
-                "치구 LWPOLYLINE 후보가 부족합니다."
-            );
+            continue;
         }
 
-        EntityData result = candidates[1];
-
-        if (result.CenterBoxX <= thirdOuterPanel.MaxX)
+        if (!x.IsClosed)
         {
-            throw new Exception(
-                "꼭짓점이 두 번째로 많은 도형이 " +
-                "4번째 패널 위치에 있지 않습니다."
-            );
+            continue;
         }
 
-        return result;
+        // 4번째 패널은 3번째 패널보다 오른쪽에 있어야 함
+        if (x.MinX <= thirdOuterPanel.MaxX)
+        {
+            continue;
+        }
+
+        candidates.Add(x);
     }
+
+    if (candidates.Count == 0)
+    {
+        return null;
+    }
+
+    // 전체 치구 LWPOLYLINE의 꼭짓점 수 중
+    // 두 번째로 많은 꼭짓점 수를 구함
+    List<int> vertexCounts = drawingData.Entities
+        .Where(x =>
+            x.LayerName == "치구" &&
+            x.ObjectName == "LWPOLYLINE" &&
+            x.IsClosed
+        )
+        .Select(x => x.Vertices.Count)
+        .Distinct()
+        .OrderByDescending(count => count)
+        .ToList();
+
+    if (vertexCounts.Count < 2)
+    {
+        return null;
+    }
+
+    int secondLargestVertexCount =
+        vertexCounts[1];
+
+    EntityData? result = candidates
+        .Where(x =>
+            x.Vertices.Count == secondLargestVertexCount
+        )
+        .OrderBy(x => x.MinX)
+        .FirstOrDefault();
+
+    // 해당 특징을 가진 패널이 없으면 null
+    return result;
+}
 
     private static List<BoltHolePair> FindFourthPanelBoltHoles(
     DrawingData drawingData,
@@ -3287,5 +3358,279 @@ internal static class Program
             Increment = 1m,
             Value = safeValue
         };
+    }
+
+    private static void SaveEntityReport(
+    DrawingData drawingData,
+    string outputPath
+    )
+    {
+        using StreamWriter writer =
+            new StreamWriter(outputPath, false);
+
+        writer.WriteLine($"버전: {drawingData.Version}");
+        writer.WriteLine($"레이어 수: {drawingData.LayerCount}");
+        writer.WriteLine($"블록 수: {drawingData.BlockCount}");
+        writer.WriteLine(
+            $"Model Space 객체 수: {drawingData.Entities.Count}"
+        );
+        writer.WriteLine();
+
+        for (int index = 0;
+            index < drawingData.Entities.Count;
+            index++)
+        {
+            EntityData x =
+                drawingData.Entities[index];
+
+            writer.Write(
+                $"[{index}] 종류={x.ObjectName}, " +
+                $"Handle={x.Handle}, " +
+                $"Layer={x.LayerName}"
+            );
+
+            switch (x.ObjectName)
+            {
+                case "LINE":
+                    writer.Write(
+                        $", Start=({x.StartX:F6}, " +
+                        $"{x.StartY:F6}, {x.StartZ:F6})"
+                    );
+
+                    writer.Write(
+                        $", End=({x.EndX:F6}, " +
+                        $"{x.EndY:F6}, {x.EndZ:F6})"
+                    );
+                    break;
+
+                case "ARC":
+                    writer.Write(
+                        $", Center=({x.CenterX:F6}, " +
+                        $"{x.CenterY:F6}, {x.CenterZ:F6})"
+                    );
+
+                    writer.Write(
+                        $", Radius={x.Radius:F6}, " +
+                        $"StartAngle={x.StartAngle:F6}, " +
+                        $"EndAngle={x.EndAngle:F6}"
+                    );
+                    break;
+
+                case "CIRCLE":
+                    writer.Write(
+                        $", Center=({x.CenterX:F6}, " +
+                        $"{x.CenterY:F6}, {x.CenterZ:F6})"
+                    );
+
+                    writer.Write(
+                        $", Radius={x.Radius:F6}, " +
+                        $"Diameter={x.Diameter:F6}"
+                    );
+                    break;
+
+                case "LWPOLYLINE":
+                    writer.Write(
+                        $", Closed={x.IsClosed}, Vertices="
+                    );
+
+                    for (int i = 0;
+                        i < x.Vertices.Count;
+                        i++)
+                    {
+                        PointData point =
+                            x.Vertices[i];
+
+                        writer.Write(
+                            $"({point.X:F6}, {point.Y:F6})"
+                        );
+
+                        if (i < x.Vertices.Count - 1)
+                        {
+                            writer.Write(" | ");
+                        }
+                    }
+                    break;
+
+                case "POLYLINE2D":
+                    writer.Write(
+                        $", Closed={x.IsClosed}, Vertices="
+                    );
+
+                    for (int i = 0;
+                        i < x.Vertices.Count;
+                        i++)
+                    {
+                        PointData point =
+                            x.Vertices[i];
+
+                        writer.Write(
+                            $"({point.X:F6}, " +
+                            $"{point.Y:F6}, " +
+                            $"{point.Z:F6})"
+                        );
+
+                        if (i < x.Vertices.Count - 1)
+                        {
+                            writer.Write(" | ");
+                        }
+                    }
+                    break;
+
+                case "TEXT":
+                case "MTEXT":
+                    writer.Write(
+                        $", Insert=({x.InsertX:F6}, " +
+                        $"{x.InsertY:F6}, " +
+                        $"{x.InsertZ:F6}), " +
+                        $"Text=\"{x.TextValue}\""
+                    );
+                    break;
+
+                case "INSERT":
+                    writer.Write(
+                        $", Block={x.BlockName}, " +
+                        $"Insert=({x.InsertX:F6}, " +
+                        $"{x.InsertY:F6}, " +
+                        $"{x.InsertZ:F6})"
+                    );
+                    break;
+
+                case "DIMENSION":
+                    writer.Write(
+                        $", Text=\"{x.TextValue}\", " +
+                        $"TextPosition=(" +
+                        $"{x.TextPositionX:F6}, " +
+                        $"{x.TextPositionY:F6}, " +
+                        $"{x.TextPositionZ:F6})"
+                    );
+                    break;
+            }
+
+            writer.WriteLine();
+        }
+    }
+
+    private static List<BoltHolePair> FindBoltHolesInsidePanel(
+    DrawingData drawingData,
+    EntityData panel,
+    double centerTolerance = 0.001,
+    double radiusTolerance = 0.000001
+    )
+    {
+        List<EntityData> circles = new();
+
+        // 패널 안의 볼트 구멍 레이어 원을 모두 수집
+        foreach (EntityData x in drawingData.Entities)
+        {
+            if (x.LayerName != "볼트 구멍")
+            {
+                continue;
+            }
+
+            if (x.ObjectName != "CIRCLE")
+            {
+                continue;
+            }
+
+            bool insidePanel =
+                x.CenterX >= panel.MinX &&
+                x.CenterX <= panel.MaxX &&
+                x.CenterY >= panel.MinY &&
+                x.CenterY <= panel.MaxY;
+
+            if (!insidePanel)
+            {
+                continue;
+            }
+
+            circles.Add(x);
+        }
+
+        List<BoltHolePair> result = new();
+        HashSet<string> usedHandles = new();
+
+        // 동일한 중심을 가진 반지름이 다른 원 두 개를 한 쌍으로 묶음
+        foreach (EntityData first in circles)
+        {
+            if (usedHandles.Contains(first.Handle))
+            {
+                continue;
+            }
+
+            EntityData? matchingCircle = null;
+
+            foreach (EntityData second in circles)
+            {
+                if (ReferenceEquals(first, second))
+                {
+                    continue;
+                }
+
+                if (usedHandles.Contains(second.Handle))
+                {
+                    continue;
+                }
+
+                bool sameCenter =
+                    Math.Abs(first.CenterX - second.CenterX)
+                        <= centerTolerance &&
+                    Math.Abs(first.CenterY - second.CenterY)
+                        <= centerTolerance;
+
+                if (!sameCenter)
+                {
+                    continue;
+                }
+
+                bool differentRadius =
+                    Math.Abs(first.Radius - second.Radius)
+                        > radiusTolerance;
+
+                if (!differentRadius)
+                {
+                    continue;
+                }
+
+                matchingCircle = second;
+                break;
+            }
+
+            // 같은 중심의 다른 크기 원이 없으면 건너뜀
+            if (matchingCircle == null)
+            {
+                continue;
+            }
+
+            EntityData outerCircle;
+            EntityData innerCircle;
+
+            if (first.Radius > matchingCircle.Radius)
+            {
+                outerCircle = first;
+                innerCircle = matchingCircle;
+            }
+            else
+            {
+                outerCircle = matchingCircle;
+                innerCircle = first;
+            }
+
+            result.Add(
+                new BoltHolePair
+                {
+                    OuterCircle = outerCircle,
+                    InnerCircle = innerCircle
+                }
+            );
+
+            usedHandles.Add(outerCircle.Handle);
+            usedHandles.Add(innerCircle.Handle);
+        }
+
+        // 위에서 아래, 같은 높이면 왼쪽에서 오른쪽
+        return result
+            .OrderByDescending(pair => pair.CenterY)
+            .ThenBy(pair => pair.CenterX)
+            .ToList();
     }
 }
