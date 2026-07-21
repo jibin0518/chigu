@@ -539,6 +539,17 @@ internal static class Program
 
         bool removeThicknessPlates =
             resizeInput.TargetDepth <= 36.0;
+        double originalWidth =
+            mainChigu.Width + 0.7;
+
+        double originalHeight =
+            mainChigu.Height + 0.7;
+
+        double targetWidth =
+            resizeInput.TargetWidth;
+
+        double targetHeight =
+            resizeInput.TargetHeight;
 
         // 크기 수정 후에도 각 판의 내부 객체를 함께 이동할 수 있도록
         // 수정 전 위치를 기준으로 패널별 객체 묶음을 먼저 만든다.
@@ -679,11 +690,13 @@ internal static class Program
             }
         }
 
-        MoveCornerCircles(
+        ResizeAndMoveCornerCircles(
             largeCircles,
             mainChigu,
-            widthDelta,
-            heightDelta
+            originalWidth,
+            originalHeight,
+            resizeInput.TargetWidth,
+            resizeInput.TargetHeight
         );
 
         ResizePolylineFromCenter(
@@ -692,11 +705,13 @@ internal static class Program
             heightDelta
         );
 
-        MoveCornerCircles(
+        ResizeAndMoveCornerCircles(
             secondPanelCircles,
             secondOuterPanel,
-            widthDelta,
-            heightDelta
+            originalWidth,
+            originalHeight,
+            resizeInput.TargetWidth,
+            resizeInput.TargetHeight
         );
 
         ResizePolylineFromCenter(
@@ -726,11 +741,13 @@ internal static class Program
             heightDelta
         );
 
-        MoveCornerCircles(
+        ResizeAndMoveCornerCircles(
             fifthPanelCircles,
             fifthOuterPanel,
-            widthDelta,
-            heightDelta
+            originalWidth,
+            originalHeight,
+            resizeInput.TargetWidth,
+            resizeInput.TargetHeight
         );
 
         ResizePolylineFromCenter(
@@ -3815,5 +3832,125 @@ internal static class Program
         return keepPairs
             .OrderBy(pair => pair.CenterX)
             .ToList();
+    }
+
+    private static void ResizeAndMoveCornerCircles(
+        IEnumerable<EntityData> circles,
+        EntityData originalPanel,
+        double originalWidth,
+        double originalHeight,
+        double targetWidth,
+        double targetHeight
+    )
+    {
+        if (originalWidth <= 0.0 || originalHeight <= 0.0)
+        {
+            throw new ArgumentOutOfRangeException(
+                "기존 패널 크기는 0보다 커야 합니다."
+            );
+        }
+
+        double widthDelta =
+            targetWidth - originalWidth;
+
+        double heightDelta =
+            targetHeight - originalHeight;
+
+        double halfWidthDelta =
+            widthDelta / 2.0;
+
+        double halfHeightDelta =
+            heightDelta / 2.0;
+
+        double widthScale =
+            targetWidth / originalWidth;
+
+        double heightScale =
+            targetHeight / originalHeight;
+
+        double averageScale =
+            (widthScale + heightScale) / 2.0;
+
+        foreach (EntityData circleData in circles)
+        {
+            if (circleData.Entity is not Circle circle)
+            {
+                continue;
+            }
+
+            double oldRadius = circle.Radius;
+
+            // ★ 버림(소수점 제거)
+            double newRadius =
+                Math.Floor(oldRadius * averageScale / 5.0) * 5.0;
+
+            double radiusDifference =
+                newRadius - oldRadius;
+
+            bool isLeft =
+                circleData.CenterX <
+                originalPanel.CenterBoxX;
+
+            bool isRight =
+                circleData.CenterX >
+                originalPanel.CenterBoxX;
+
+            bool isTop =
+                circleData.CenterY >
+                originalPanel.CenterBoxY;
+
+            bool isBottom =
+                circleData.CenterY <
+                originalPanel.CenterBoxY;
+
+            double moveX = 0.0;
+            double moveY = 0.0;
+
+            // 패널 크기 변화에 따른 이동
+            if (isLeft)
+            {
+                moveX -= halfWidthDelta;
+            }
+            else if (isRight)
+            {
+                moveX += halfWidthDelta;
+            }
+
+            if (isTop)
+            {
+                moveY += halfHeightDelta;
+            }
+            else if (isBottom)
+            {
+                moveY -= halfHeightDelta;
+            }
+
+            // 반지름 증가/감소에 따른 안쪽 보정
+            if (isLeft)
+            {
+                moveX += radiusDifference;
+            }
+            else if (isRight)
+            {
+                moveX -= radiusDifference;
+            }
+
+            if (isTop)
+            {
+                moveY -= radiusDifference;
+            }
+            else if (isBottom)
+            {
+                moveY += radiusDifference;
+            }
+
+            circle.Radius = newRadius;
+
+            circle.Center = new XYZ(
+                circle.Center.X + moveX,
+                circle.Center.Y + moveY,
+                circle.Center.Z
+            );
+        }
     }
 }
