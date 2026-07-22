@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("autochi")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("1.0.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+7ca67db7e5f26e400085b3bd6d0f110359bc6bda")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("1.0.0+fb26d111fbb164f8aa5096983d47193b80e75c5b")]
 [assembly: System.Reflection.AssemblyProductAttribute("autochi")]
 [assembly: System.Reflection.AssemblyTitleAttribute("autochi")]
 [assembly: System.Reflection.AssemblyVersionAttribute("1.0.0.0")]
