@@ -3882,7 +3882,10 @@ internal static class Program
 
             // ★ 버림(소수점 제거)
             double newRadius =
-                Math.Floor(oldRadius * averageScale / 5.0) * 5.0;
+                5.0 * Math.Round(
+                    oldRadius * averageScale / 5.0,
+                    MidpointRounding.AwayFromZero
+                );
 
             double radiusDifference =
                 newRadius - oldRadius;
