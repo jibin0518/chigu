@@ -1,0 +1,78 @@
+버전: AC1015
+레이어 수: 6
+블록 수: 39
+Model Space 객체 수: 73
+
+[0] 종류=CIRCLE, Handle=427, Layer=볼트 구멍, Center=(1640.473554, 442.858707, 0.000000), Radius=2.750000, Diameter=5.500000
+[1] 종류=CIRCLE, Handle=428, Layer=볼트 구멍, Center=(1640.473554, 442.858707, 0.000000), Radius=6.500000, Diameter=13.000000
+[2] 종류=CIRCLE, Handle=429, Layer=볼트 구멍, Center=(1610.473554, 442.858707, 0.000000), Radius=6.500000, Diameter=13.000000
+[3] 종류=CIRCLE, Handle=430, Layer=볼트 구멍, Center=(1610.473554, 442.858707, 0.000000), Radius=2.750000, Diameter=5.500000
+[4] 종류=LWPOLYLINE, Handle=431, Layer=0, Closed=True, Vertices=(997.973554, 415.358707) | (1052.973554, 415.358707) | (1052.973554, 450.358707) | (997.973554, 450.358707)
+[5] 종류=DIMENSION, Handle=432, Layer=치수, Text="", TextPosition=(1811.427455, 432.858707, 0.000000)
+[6] 종류=LWPOLYLINE, Handle=433, Layer=치구, Closed=True, Vertices=(1825.823554, 532.508707) | (1825.823554, 333.208707) | (2025.123554, 333.208707) | (2025.123554, 532.508707)
+[7] 종류=DIMENSION, Handle=434, Layer=치수, Text="", TextPosition=(1511.677455, 432.858707, 0.000000)
+[8] 종류=LWPOLYLINE, Handle=435, Layer=치구, Closed=True, Vertices=(1526.823554, 531.508707) | (1526.823554, 334.208707) | (1724.123554, 334.208707) | (1724.123554, 531.508707)
+[9] 종류=LWPOLYLINE, Handle=436, Layer=치구, Closed=True, Vertices=(491.244012, 333.208707) | (498.244012, 333.208707) | (498.244012, 337.208707) | (510.244012, 337.208707) | (510.244012, 333.208707) | (671.544012, 333.208707) | (671.544012, 337.208707) | (683.544012, 337.208707) | (683.544012, 333.208707) | (690.544012, 333.208707) | (690.544012, 532.508707) | (683.544012, 532.508707) | (683.544012, 528.508707) | (671.544012, 528.508707) | (671.544012, 532.508707) | (510.244012, 532.508707) | (510.244012, 528.508707) | (498.244012, 528.508707) | (498.244012, 532.508707) | (491.244012, 532.508707)
+[10] 종류=LWPOLYLINE, Handle=437, Layer=치구, Closed=True, Vertices=(453.994012, 515.108707) | (418.994012, 515.108707) | (418.994012, 350.608707) | (453.994012, 350.608707)
+[11] 종류=DIMENSION, Handle=438, Layer=치수, Text="", TextPosition=(477.364328, 432.858707, 0.000000)
+[12] 종류=DIMENSION, Handle=439, Layer=치수, Text="", TextPosition=(403.526357, 432.858707, 0.000000)
+[13] 종류=LWPOLYLINE, Handle=440, Layer=치구, Closed=True, Vertices=(727.794012, 515.108707) | (762.794012, 515.108707) | (762.794012, 350.608707) | (727.794012, 350.608707)
+[14] 종류=DIMENSION, Handle=441, Layer=치수, Text="", TextPosition=(778.261667, 432.858707, 0.000000)
+[15] 종류=LWPOLYLINE, Handle=442, Layer=치구, Closed=True, Vertices=(925.823554, 532.508707) | (925.823554, 333.208707) | (1125.123554, 333.208707) | (1125.123554, 532.508707)
+[16] 종류=DIMENSION, Handle=443, Layer=치수, Text="", TextPosition=(911.677455, 432.858707, 0.000000)
+[17] 종류=DIMENSION, Handle=444, Layer=치수, Text="", TextPosition=(1211.677455, 432.858707, 0.000000)
+[18] 종류=LWPOLYLINE, Handle=445, Layer=치구, Closed=True, Vertices=(1225.823554, 532.508707) | (1225.823554, 333.208707) | (1425.123554, 333.208707) | (1425.123554, 532.508707)
+[19] 종류=LWPOLYLINE, Handle=446, Layer=치구, Closed=True, Vertices=(1238.823554, 519.508707) | (1238.823554, 346.208707) | (1412.123554, 346.208707) | (1412.123554, 519.508707)
+[20] 종류=DIMENSION, Handle=447, Layer=치수, Text="", TextPosition=(705.063078, 293.489818, 0.000000)
+[21] 종류=TEXT, Handle=448, Layer=TEXT, Insert=(674.884906, 277.519894, 0.000000), Text="3"
+[22] 종류=LWPOLYLINE, Handle=449, Layer=치구, Closed=True, Vertices=(683.544012, 299.989818) | (671.544012, 299.989818) | (671.544012, 260.992342) | (683.544012, 260.992342)
+[23] 종류=LWPOLYLINE, Handle=450, Layer=치구, Closed=True, Vertices=(498.244012, 299.989818) | (510.244012, 299.989818) | (510.244012, 260.992342) | (498.244012, 260.992342)
+[24] 종류=LWPOLYLINE, Handle=451, Layer=치구, Closed=True, Vertices=(491.244012, 297.989818) | (690.544012, 297.989818) | (690.544012, 262.989818) | (491.244012, 262.989818)
+[25] 종류=DIMENSION, Handle=452, Layer=치수, Text="", TextPosition=(540.894012, 251.479242, 0.000000)
+[26] 종류=CIRCLE, Handle=453, Layer=볼트 구멍, Center=(576.394012, 432.858707, 0.000000), Radius=6.500000, Diameter=13.000000
+[27] 종류=CIRCLE, Handle=454, Layer=볼트 구멍, Center=(576.394012, 432.858707, 0.000000), Radius=3.250000, Diameter=6.500000
+[28] 종류=CIRCLE, Handle=455, Layer=볼트 구멍, Center=(605.394012, 432.858707, 0.000000), Radius=6.500000, Diameter=13.000000
+[29] 종류=CIRCLE, Handle=456, Layer=볼트 구멍, Center=(605.394012, 432.858707, 0.000000), Radius=3.250000, Diameter=6.500000
+[30] 종류=CIRCLE, Handle=457, Layer=치구, Center=(653.044012, 370.708707, 0.000000), Radius=19.500000, Diameter=39.000000
+[31] 종류=CIRCLE, Handle=458, Layer=치구, Center=(528.744012, 370.708707, 0.000000), Radius=19.500000, Diameter=39.000000
+[32] 종류=CIRCLE, Handle=459, Layer=볼트 구멍, Center=(1025.473554, 432.858707, 0.000000), Radius=6.000000, Diameter=12.000000
+[33] 종류=CIRCLE, Handle=460, Layer=볼트 구멍, Center=(1011.223554, 432.858707, 0.000000), Radius=3.250000, Diameter=6.500000
+[34] 종류=CIRCLE, Handle=461, Layer=볼트 구멍, Center=(1011.223554, 432.858707, 0.000000), Radius=6.500000, Diameter=13.000000
+[35] 종류=CIRCLE, Handle=462, Layer=치구, Center=(958.323554, 365.708707, 0.000000), Radius=19.500000, Diameter=39.000000
+[36] 종류=CIRCLE, Handle=463, Layer=볼트 구멍, Center=(1039.723554, 432.858707, 0.000000), Radius=6.500000, Diameter=13.000000
+[37] 종류=CIRCLE, Handle=464, Layer=볼트 구멍, Center=(1039.723554, 432.858707, 0.000000), Radius=3.250000, Diameter=6.500000
+[38] 종류=CIRCLE, Handle=465, Layer=치구, Center=(1092.623554, 365.708707, 0.000000), Radius=19.500000, Diameter=39.000000
+[39] 종류=CIRCLE, Handle=466, Layer=치구, Center=(1558.323554, 365.708707, 0.000000), Radius=19.500000, Diameter=39.000000
+[40] 종류=CIRCLE, Handle=467, Layer=볼트 구멍, Center=(1640.473554, 422.858707, 0.000000), Radius=2.750000, Diameter=5.500000
+[41] 종류=CIRCLE, Handle=468, Layer=볼트 구멍, Center=(1640.473554, 422.858707, 0.000000), Radius=6.500000, Diameter=13.000000
+[42] 종류=CIRCLE, Handle=469, Layer=볼트 구멍, Center=(1610.473554, 422.858707, 0.000000), Radius=2.750000, Diameter=5.500000
+[43] 종류=CIRCLE, Handle=470, Layer=볼트 구멍, Center=(1610.473554, 422.858707, 0.000000), Radius=6.500000, Diameter=13.000000
+[44] 종류=CIRCLE, Handle=471, Layer=볼트 구멍, Center=(1614.473554, 432.858707, 0.000000), Radius=2.750000, Diameter=5.500000
+[45] 종류=CIRCLE, Handle=472, Layer=볼트 구멍, Center=(1614.473554, 432.858707, 0.000000), Radius=6.500000, Diameter=13.000000
+[46] 종류=CIRCLE, Handle=473, Layer=볼트 구멍, Center=(1636.473554, 432.858707, 0.000000), Radius=2.750000, Diameter=5.500000
+[47] 종류=CIRCLE, Handle=474, Layer=볼트 구멍, Center=(1636.473554, 432.858707, 0.000000), Radius=6.500000, Diameter=13.000000
+[48] 종류=CIRCLE, Handle=475, Layer=치구, Center=(1692.623554, 365.708707, 0.000000), Radius=19.500000, Diameter=39.000000
+[49] 종류=CIRCLE, Handle=476, Layer=볼트 구멍, Center=(1939.973554, 432.858707, 0.000000), Radius=6.500000, Diameter=13.000000
+[50] 종류=CIRCLE, Handle=477, Layer=볼트 구멍, Center=(1939.973554, 432.858707, 0.000000), Radius=3.250000, Diameter=6.500000
+[51] 종류=CIRCLE, Handle=478, Layer=볼트 구멍, Center=(1910.973554, 432.858707, 0.000000), Radius=6.500000, Diameter=13.000000
+[52] 종류=CIRCLE, Handle=479, Layer=볼트 구멍, Center=(1910.973554, 432.858707, 0.000000), Radius=3.250000, Diameter=6.500000
+[53] 종류=DIMENSION, Handle=480, Layer=치수, Text="", TextPosition=(1325.473554, 545.849181, 0.000000)
+[54] 종류=DIMENSION, Handle=481, Layer=치수, Text="", TextPosition=(734.794012, 521.335468, 0.000000)
+[55] 종류=DIMENSION, Handle=482, Layer=치수, Text="", TextPosition=(705.063078, 575.227596, 0.000000)
+[56] 종류=LWPOLYLINE, Handle=483, Layer=치구, Closed=True, Vertices=(683.544012, 565.727596) | (671.544012, 565.727596) | (671.544012, 604.725072) | (683.544012, 604.725072)
+[57] 종류=LWPOLYLINE, Handle=484, Layer=치구, Closed=True, Vertices=(498.244012, 565.727596) | (510.244012, 565.727596) | (510.244012, 604.725072) | (498.244012, 604.725072)
+[58] 종류=LWPOLYLINE, Handle=485, Layer=치구, Closed=True, Vertices=(491.244012, 567.727596) | (690.544012, 567.727596) | (690.544012, 602.727596) | (491.244012, 602.727596)
+[59] 종류=DIMENSION, Handle=486, Layer=치수, Text="", TextPosition=(452.994012, 521.335468, 0.000000)
+[60] 종류=DIMENSION, Handle=487, Layer=치수, Text="", TextPosition=(590.894012, 542.080528, 0.000000)
+[61] 종류=CIRCLE, Handle=488, Layer=치구, Center=(653.044012, 495.008707, 0.000000), Radius=19.500000, Diameter=39.000000
+[62] 종류=CIRCLE, Handle=489, Layer=치구, Center=(528.744012, 495.008707, 0.000000), Radius=19.500000, Diameter=39.000000
+[63] 종류=TEXT, Handle=490, Layer=TEXT, Insert=(672.356111, 584.029100, 0.000000), Text="3"
+[64] 종류=DIMENSION, Handle=491, Layer=치수, Text="", TextPosition=(540.894012, 611.549416, 0.000000)
+[65] 종류=DIMENSION, Handle=492, Layer=치수, Text="", TextPosition=(1025.473554, 545.849181, 0.000000)
+[66] 종류=CIRCLE, Handle=493, Layer=치구, Center=(958.323554, 500.008707, 0.000000), Radius=19.500000, Diameter=39.000000
+[67] 종류=CIRCLE, Handle=494, Layer=치구, Center=(1092.623554, 500.008707, 0.000000), Radius=19.500000, Diameter=39.000000
+[68] 종류=TEXT, Handle=495, Layer=TEXT, Insert=(1856.635929, 504.022848, 0.000000), Text="18T"
+[69] 종류=DIMENSION, Handle=496, Layer=치수, Text="", TextPosition=(1925.473554, 545.849181, 0.000000)
+[70] 종류=DIMENSION, Handle=497, Layer=치수, Text="", TextPosition=(1625.473554, 545.849181, 0.000000)
+[71] 종류=CIRCLE, Handle=498, Layer=치구, Center=(1558.323554, 500.008707, 0.000000), Radius=19.500000, Diameter=39.000000
+[72] 종류=CIRCLE, Handle=499, Layer=치구, Center=(1692.623554, 500.008707, 0.000000), Radius=19.500000, Diameter=39.000000

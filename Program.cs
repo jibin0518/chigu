@@ -7,6 +7,8 @@ using ACadSharp;
 using ACadSharp.Entities;
 using ACadSharp.IO;
 using CSMath;
+using System.Runtime.InteropServices;
+using System.Threading;
 
 namespace DwgAutoResize;
 
@@ -798,6 +800,8 @@ internal static class Program
             $"{resizeInput.TargetHeight:0.###}x" +
             $"{resizeInput.TargetDepth:0.###}.dwg"
         );
+
+        ValidateEntitiesBeforeSave(document);
 
         SaveAsNewDwg(
             document,
@@ -3954,6 +3958,82 @@ internal static class Program
                 circle.Center.Y + moveY,
                 circle.Center.Z
             );
+        }
+    }
+
+    private static void ValidateEntitiesBeforeSave(
+        CadDocument document
+    )
+    {
+        HashSet<Entity> seen = new();
+
+        foreach (Entity entity in document.Entities)
+        {
+            if (!seen.Add(entity))
+            {
+                throw new Exception(
+                    $"같은 Entity 객체가 중복 등록되어 있습니다. " +
+                    $"Handle={entity.Handle}, Type={entity.ObjectName}"
+                );
+            }
+
+            switch (entity)
+            {
+                case Arc arc:
+                    if (!double.IsFinite(arc.Center.X) ||
+                        !double.IsFinite(arc.Center.Y) ||
+                        !double.IsFinite(arc.Radius) ||
+                        !double.IsFinite(arc.StartAngle) ||
+                        !double.IsFinite(arc.EndAngle) ||
+                        arc.Radius <= 0.0)
+                    {
+                        throw new Exception(
+                            $"잘못된 호입니다. " +
+                            $"Handle={arc.Handle}, Radius={arc.Radius}"
+                        );
+                    }
+                    break;
+
+                case Circle circle:
+                    if (!double.IsFinite(circle.Center.X) ||
+                        !double.IsFinite(circle.Center.Y) ||
+                        !double.IsFinite(circle.Radius) ||
+                        circle.Radius <= 0.0)
+                    {
+                        throw new Exception(
+                            $"잘못된 원입니다. " +
+                            $"Handle={circle.Handle}, " +
+                            $"Center=({circle.Center.X}, {circle.Center.Y}), " +
+                            $"Radius={circle.Radius}"
+                        );
+                    }
+                    break;
+
+                
+
+                case LwPolyline polyline:
+                    if (polyline.Vertices.Count < 2)
+                    {
+                        throw new Exception(
+                            $"꼭짓점이 부족한 LWPOLYLINE입니다. " +
+                            $"Handle={polyline.Handle}, " +
+                            $"Vertices={polyline.Vertices.Count}"
+                        );
+                    }
+
+                    foreach (var vertex in polyline.Vertices)
+                    {
+                        if (!double.IsFinite(vertex.Location.X) ||
+                            !double.IsFinite(vertex.Location.Y))
+                        {
+                            throw new Exception(
+                                $"잘못된 LWPOLYLINE 좌표입니다. " +
+                                $"Handle={polyline.Handle}"
+                            );
+                        }
+                    }
+                    break;
+            }
         }
     }
 }
