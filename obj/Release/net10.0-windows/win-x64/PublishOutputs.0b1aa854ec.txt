@@ -1,2 +1,0 @@
-D:\Github\chigu\bin\Release\net10.0-windows\win-x64\publish\autochi.pdb
-D:\Github\chigu\bin\Release\net10.0-windows\win-x64\publish\autochi.exe
