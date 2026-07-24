@@ -1,0 +1,18 @@
+ # Build output
+bin/
+obj/
+
+# VS Code
+.vscode/
+
+# Visual Studio
+.vs/
+
+# Publish folder
+PublishOutput/
+
+# EXE 파일 제외
+*.exe
+
+# 디버그 파일
+*.pdb
