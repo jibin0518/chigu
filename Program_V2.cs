@@ -121,6 +121,15 @@ internal static class Program
                 );
             }
 
+            // 한 패널 안에서 같은 Y축에 볼트 구멍 원 4쌍이 있으면
+            // 목표 가로 120 이하: 중심에 가까운 2쌍 유지
+            // 목표 가로 120 초과: 중심에 가까운 2쌍 삭제(바깥쪽 2쌍 유지)
+            SelectBoltHolePairsByTargetWidth(
+                drawingData,
+                panelGroups,
+                resizeInput.TargetWidth
+            );
+
             ApplyPanelResize(
                 drawingData,
                 panelGroups,
@@ -658,8 +667,6 @@ internal static class Program
             );
         }
 
-        const double minimumThicknessAspectRatio = 2.0;
-
         List<EntityData> allWhiteChiguPolylines = drawingData.Entities
             .Where(IsWhiteChiguPolyline)
             .Where(x => x.HasBoundingBox)
@@ -676,8 +683,9 @@ internal static class Program
             )
             .ToList();
 
-        // 두께 패널은 개수 제한 없이 원본 흰색 치구 폴리선 전체에서 먼저 찾는다.
-        // 가로와 세로가 모두 100 이하이면 비율 1.5, 그 외에는 2.0을 적용한다.
+        // 각 두께 패널 후보 자신의 수정 전 크기로 최소 비율을 결정한다.
+        // 후보 자체가 100x100 이하이면 1.5 이상,
+        // 그 외에는 2.0 이상이며, 모든 경우 4.0 미만이어야 한다.
         List<EntityData> thicknessPanelBases = allWhiteChiguPolylines
             .Where(IsThicknessPanelBase)
             .OrderBy(x => x.MinX)
@@ -835,24 +843,28 @@ internal static class Program
         EntityData panelBase
     )
     {
-        double longSide = Math.Max(
-            panelBase.Width,
-            panelBase.Height
-        );
+        DimensionBounds bounds =
+            GetCurrentBounds(panelBase.Entity);
 
-        double shortSide = Math.Min(
-            panelBase.Width,
-            panelBase.Height
-        );
+        double width =
+            bounds.MaxX - bounds.MinX;
 
-        if (shortSide <= 0.0)
+        double height =
+            bounds.MaxY - bounds.MinY;
+
+        double longSide =
+            Math.Max(width, height);
+
+        double shortSide =
+            Math.Min(width, height);
+
+        if (shortSide <= 0.000001)
         {
             return 0.0;
         }
 
         return longSide / shortSide;
     }
-
 
     private static bool IsCompletelyInside(
         EntityData inner,
@@ -882,38 +894,24 @@ internal static class Program
     {
         foreach (PanelGroup panel in panels)
         {
-            DimensionBounds bounds =
-                GetCurrentBounds(panel.BasePolyline.Entity);
-
-            double width = bounds.MaxX - bounds.MinX;
-            double height = bounds.MaxY - bounds.MinY;
-
-            panel.IsThicknessPanel = false;
-            panel.ThicknessDirection = ThicknessPanelDirection.None;
-            panel.AspectRatio = 0.0;
-
+            // 수정 전 수집된 기준 폴리선 크기를 사용한다.
+            double width = panel.BasePolyline.Width;
+            double height = panel.BasePolyline.Height;
             double longSide = Math.Max(width, height);
             double shortSide = Math.Min(width, height);
 
-            if (shortSide <= 0.000001)
+            panel.AspectRatio =
+                shortSide > 0.000001
+                    ? longSide / shortSide
+                    : 0.0;
+
+            // FindPanelGroups에서 먼저 두께 패널로 확정한 결과를 유지한다.
+            if (!panel.IsThicknessPanel)
             {
+                panel.ThicknessDirection = ThicknessPanelDirection.None;
                 continue;
             }
 
-            double aspectRatio = longSide / shortSide;
-            double minimumAspectRatio =
-                width <= 100.0 && height <= 100.0
-                    ? 1.5
-                    : 2.0;
-
-            panel.AspectRatio = aspectRatio;
-
-            if (aspectRatio < minimumAspectRatio)
-            {
-                continue;
-            }
-
-            panel.IsThicknessPanel = true;
             panel.ThicknessDirection =
                 width > height
                     ? ThicknessPanelDirection.Horizontal
@@ -1452,6 +1450,234 @@ internal static class Program
     }
 
 
+
+    private sealed class BoltHoleCirclePair
+    {
+        public required EntityData OuterCircle { get; init; }
+        public required EntityData InnerCircle { get; init; }
+
+        public double CenterX => OuterCircle.CenterX;
+        public double CenterY => OuterCircle.CenterY;
+    }
+
+    /// <summary>
+    /// 각 패널에서 같은 Y축 위치에 있는 볼트 구멍 4쌍을 찾는다.
+    /// 목표 가로가 120 이하이면 패널 중심에 가까운 2쌍만 유지하고,
+    /// 120 초과이면 중심에 가까운 2쌍을 삭제하여 바깥쪽 2쌍만 유지한다.
+    /// 한 쌍은 중심이 같고 반지름이 다른 "볼트 구멍" 레이어 원 2개다.
+    /// </summary>
+    private static void SelectBoltHolePairsByTargetWidth(
+        DrawingData drawingData,
+        IReadOnlyList<PanelGroup> panelGroups,
+        double targetWidth,
+        double centerTolerance = 0.001,
+        double yTolerance = 0.001
+    )
+    {
+        foreach (PanelGroup panel in panelGroups)
+        {
+            List<EntityData> boltCircles = panel.Entities
+                .Where(entity =>
+                    string.Equals(
+                        entity.LayerName,
+                        "볼트 구멍",
+                        StringComparison.OrdinalIgnoreCase
+                    ))
+                .Where(entity => entity.Entity is Circle)
+                .GroupBy(entity => entity.Handle)
+                .Select(group => group.First())
+                .ToList();
+
+            if (boltCircles.Count < 8)
+            {
+                continue;
+            }
+
+            List<BoltHoleCirclePair> pairs =
+                BuildBoltHoleCirclePairs(
+                    boltCircles,
+                    centerTolerance
+                );
+
+            if (pairs.Count < 4)
+            {
+                continue;
+            }
+
+            // 같은 Y축 줄별로 묶는다.
+            List<List<BoltHoleCirclePair>> yGroups = new();
+
+            foreach (BoltHoleCirclePair pair in pairs
+                .OrderBy(item => item.CenterY)
+                .ThenBy(item => item.CenterX))
+            {
+                List<BoltHoleCirclePair>? matchingGroup =
+                    yGroups.FirstOrDefault(group =>
+                        Math.Abs(group[0].CenterY - pair.CenterY)
+                            <= yTolerance
+                    );
+
+                if (matchingGroup == null)
+                {
+                    matchingGroup = new List<BoltHoleCirclePair>();
+                    yGroups.Add(matchingGroup);
+                }
+
+                matchingGroup.Add(pair);
+            }
+
+            DimensionBounds panelBounds =
+                GetCurrentBounds(panel.BasePolyline.Entity);
+
+            double panelCenterX =
+                (panelBounds.MinX + panelBounds.MaxX) / 2.0;
+
+            foreach (List<BoltHoleCirclePair> row in yGroups
+                .Where(group => group.Count == 4))
+            {
+                List<BoltHoleCirclePair> orderedByCenterDistance = row
+                    .OrderBy(pair =>
+                        Math.Abs(pair.CenterX - panelCenterX))
+                    .ToList();
+
+                // 두 경우 모두 최종적으로 삭제할 대상은 2쌍이다.
+                // 120 이하는 바깥쪽 2쌍 삭제,
+                // 120 초과는 안쪽 2쌍 삭제.
+                List<BoltHoleCirclePair> pairsToDelete =
+                    targetWidth <= 120.0
+                        ? orderedByCenterDistance
+                            .Skip(2)
+                            .Take(2)
+                            .ToList()
+                        : orderedByCenterDistance
+                            .Take(2)
+                            .ToList();
+
+                foreach (BoltHoleCirclePair pair in pairsToDelete)
+                {
+                    RemoveEntityFromDrawing(
+                        drawingData,
+                        pair.OuterCircle
+                    );
+
+                    RemoveEntityFromDrawing(
+                        drawingData,
+                        pair.InnerCircle
+                    );
+
+                    panel.Entities.RemoveAll(entity =>
+                        string.Equals(
+                            entity.Handle,
+                            pair.OuterCircle.Handle,
+                            StringComparison.OrdinalIgnoreCase
+                        ) ||
+                        string.Equals(
+                            entity.Handle,
+                            pair.InnerCircle.Handle,
+                            StringComparison.OrdinalIgnoreCase
+                        )
+                    );
+                }
+            }
+        }
+    }
+
+    private static List<BoltHoleCirclePair> BuildBoltHoleCirclePairs(
+        IReadOnlyList<EntityData> circles,
+        double centerTolerance
+    )
+    {
+        List<BoltHoleCirclePair> result = new();
+        HashSet<string> usedHandles = new(
+            StringComparer.OrdinalIgnoreCase
+        );
+
+        foreach (EntityData first in circles)
+        {
+            if (usedHandles.Contains(first.Handle))
+            {
+                continue;
+            }
+
+            EntityData? second = circles
+                .Where(candidate =>
+                    !ReferenceEquals(candidate, first) &&
+                    !usedHandles.Contains(candidate.Handle))
+                .Where(candidate =>
+                    Math.Abs(candidate.CenterX - first.CenterX)
+                        <= centerTolerance &&
+                    Math.Abs(candidate.CenterY - first.CenterY)
+                        <= centerTolerance)
+                .Where(candidate =>
+                    Math.Abs(candidate.Radius - first.Radius)
+                        > 0.000001)
+                .OrderBy(candidate =>
+                    Math.Abs(candidate.Radius - first.Radius))
+                .FirstOrDefault();
+
+            if (second == null)
+            {
+                continue;
+            }
+
+            EntityData outer =
+                first.Radius >= second.Radius
+                    ? first
+                    : second;
+
+            EntityData inner =
+                first.Radius < second.Radius
+                    ? first
+                    : second;
+
+            result.Add(new BoltHoleCirclePair
+            {
+                OuterCircle = outer,
+                InnerCircle = inner
+            });
+
+            usedHandles.Add(first.Handle);
+            usedHandles.Add(second.Handle);
+        }
+
+        return result;
+    }
+
+    private static void RemoveEntityFromDrawing(
+        DrawingData drawingData,
+        EntityData entityData
+    )
+    {
+        Entity entity = entityData.Entity;
+
+        if (drawingData.Document.Entities.Contains(entity))
+        {
+            drawingData.Document.Entities.Remove(entity);
+        }
+        else
+        {
+            foreach (var blockRecord in drawingData.Document.BlockRecords)
+            {
+                if (!blockRecord.Entities.Contains(entity))
+                {
+                    continue;
+                }
+
+                blockRecord.Entities.Remove(entity);
+                break;
+            }
+        }
+
+        drawingData.Entities.RemoveAll(item =>
+            string.Equals(
+                item.Handle,
+                entityData.Handle,
+                StringComparison.OrdinalIgnoreCase
+            )
+        );
+    }
+
+
     /// <summary>
     /// 목표 높이가 36 이하일 때 모든 두께 패널 묶음을 DWG에서 삭제한다.
     /// 패널 기준 폴리선뿐 아니라 빨간 박스, 치수 및 묶인 모든 객체를 제거하며,
@@ -1462,48 +1688,16 @@ internal static class Program
         List<PanelGroup> panelGroups
     )
     {
-        // 저장된 분류값만 믿지 않고 기준 폴리선의 실제 현재 외곽 비율로
-        // 두께 패널을 다시 판별한다. 분류가 누락되어도 삭제되게 한다.
+        // FindPanelGroups에서 최초 확정된 두께 패널만 삭제한다.
+        // 여기서 비율을 다시 계산하면 일반 패널이 두께 패널로 뒤집힐 수 있다.
         List<PanelGroup> thicknessPanels = panelGroups
-        .Where(panel =>
+            .Where(panel => panel.IsThicknessPanel)
+            .ToList();
+
+        if (thicknessPanels.Count == 0)
         {
-            DimensionBounds bounds =
-                GetCurrentBounds(panel.BasePolyline.Entity);
-
-            double width =
-                bounds.MaxX - bounds.MinX;
-
-            double height =
-                bounds.MaxY - bounds.MinY;
-
-            double longSide =
-                Math.Max(width, height);
-
-            double shortSide =
-                Math.Min(width, height);
-
-            if (shortSide <= 0.000001)
-            {
-                return false;
-            }
-
-            double aspectRatio =
-                longSide / shortSide;
-
-            double minimumAspectRatio =
-                width <= 105.0 &&
-                height <= 105.0
-                    ? 1.5
-                    : 2.0;
-
-            return aspectRatio >= minimumAspectRatio;
-        })
-        .ToList();
-
-    if (thicknessPanels.Count == 0)
-    {
-        return;
-    }
+            return;
+        }
 
         HashSet<Entity> entitiesToRemove = thicknessPanels
             .SelectMany(panel => panel.Entities
@@ -3412,24 +3606,31 @@ internal static class Program
         public double Bulge { get; init; }
     }
 
-    private static double GetThicknessAspectRatioThreshold(
-        EntityData panelBase
-    )
-    {
-        return panelBase.Width <= 100.0 &&
-            panelBase.Height <= 100.0
-            ? 1.5
-            : 2.0;
-    }
-
     private static bool IsThicknessPanelBase(
         EntityData panelBase
     )
     {
-        double ratio = GetPanelAspectRatio(panelBase);
-        double threshold =
-            GetThicknessAspectRatioThreshold(panelBase);
+        // 각 후보 폴리선의 DWG 최초 로드 시점 크기를 사용한다.
+        double width = panelBase.Width;
+        double height = panelBase.Height;
 
-        return ratio >= threshold;
+        double longSide = Math.Max(width, height);
+        double shortSide = Math.Min(width, height);
+
+        if (shortSide <= 0.000001)
+        {
+            return false;
+        }
+
+        double ratio = longSide / shortSide;
+
+        double minimumAspectRatio =
+            width <= 100.0 &&
+            height <= 100.0
+                ? 1.5
+                : 4.0;
+
+        return ratio >= minimumAspectRatio &&
+               ratio < 10.0;
     }
 }
