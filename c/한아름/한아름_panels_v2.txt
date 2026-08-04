@@ -1,0 +1,191 @@
+찾은 패널 수: 13
+기준: Layer=치구, POLYLINE, ColorIndex=7(흰색)
+포함 범위: 기준 폴리선 바운딩박스 사방 25
+
+[패널 1]
+기준 Handle=522, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+기준 Bounds=(439.403434, 297.718353) ~ (474.403434, 462.218353)
+검색 Bounds=(409.403434, 267.718353) ~ (504.403434, 492.218353)
+묶인 객체 수=3
+두께 패널=True, 방향=Vertical, 가로세로비=4.700
+  Handle=522, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+  Handle=523, Type=DIMENSION, Layer=치수, ColorIndex=4
+  Handle=524, Type=DIMENSION, Layer=치수, ColorIndex=4
+
+[패널 2]
+기준 Handle=591, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+기준 Bounds=(511.653434, 514.837241) ~ (710.953434, 549.837241)
+검색 Bounds=(481.653434, 484.837241) ~ (740.953434, 579.837241)
+묶인 객체 수=6
+두께 패널=True, 방향=Horizontal, 가로세로비=5.694
+  Handle=590, Type=DIMENSION, Layer=치수, ColorIndex=4
+  Handle=591, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+  Handle=593, Type=DIMENSION, Layer=치수, ColorIndex=4
+  Handle=594, Type=LWPOLYLINE, Layer=치구, ColorIndex=1
+  Handle=595, Type=LWPOLYLINE, Layer=치구, ColorIndex=1
+  Handle=596, Type=TEXT, Layer=TEXT, ColorIndex=1
+
+[패널 3]
+기준 Handle=527, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+기준 Bounds=(511.653434, 280.318353) ~ (710.953434, 479.618353)
+검색 Bounds=(481.653434, 250.318353) ~ (740.953434, 509.618353)
+묶인 객체 수=15
+두께 패널=False, 방향=None, 가로세로비=1.000
+  Handle=515, Type=DIMENSION, Layer=치수, ColorIndex=4
+  Handle=527, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+  Handle=528, Type=DIMENSION, Layer=치수, ColorIndex=4
+  Handle=530, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=531, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=2
+  Handle=532, Type=CIRCLE, Layer=치구, ColorIndex=7
+  Handle=533, Type=CIRCLE, Layer=치구, ColorIndex=7
+  Handle=535, Type=CIRCLE, Layer=치구, ColorIndex=7
+  Handle=536, Type=CIRCLE, Layer=치구, ColorIndex=7
+  Handle=537, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=538, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=2
+  Handle=539, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=540, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=2
+  Handle=541, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=542, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=2
+
+[패널 4]
+기준 Handle=517, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+기준 Bounds=(511.653434, 210.099464) ~ (710.953434, 245.099464)
+검색 Bounds=(481.653434, 180.099464) ~ (740.953434, 275.099464)
+묶인 객체 수=6
+두께 패널=True, 방향=Horizontal, 가로세로비=5.694
+  Handle=517, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+  Handle=518, Type=LWPOLYLINE, Layer=치구, ColorIndex=1
+  Handle=519, Type=LWPOLYLINE, Layer=치구, ColorIndex=1
+  Handle=520, Type=DIMENSION, Layer=치수, ColorIndex=4
+  Handle=521, Type=DIMENSION, Layer=치수, ColorIndex=4
+  Handle=534, Type=TEXT, Layer=TEXT, ColorIndex=1
+
+[패널 5]
+기준 Handle=525, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+기준 Bounds=(748.203434, 297.718353) ~ (783.203434, 462.218353)
+검색 Bounds=(718.203434, 267.718353) ~ (813.203434, 492.218353)
+묶인 객체 수=3
+두께 패널=True, 방향=Vertical, 가로세로비=4.700
+  Handle=525, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+  Handle=529, Type=DIMENSION, Layer=치수, ColorIndex=4
+  Handle=544, Type=DIMENSION, Layer=치수, ColorIndex=4
+
+[패널 6]
+기준 Handle=526, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+기준 Bounds=(934.403434, 297.718353) ~ (971.403434, 462.218353)
+검색 Bounds=(904.403434, 267.718353) ~ (1001.403434, 492.218353)
+묶인 객체 수=2
+두께 패널=True, 방향=Vertical, 가로세로비=4.446
+  Handle=526, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+  Handle=543, Type=DIMENSION, Layer=치수, ColorIndex=4
+
+[패널 7]
+기준 Handle=599, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+기준 Bounds=(1011.653434, 517.837241) ~ (1210.953434, 554.837241)
+검색 Bounds=(981.653434, 487.837241) ~ (1240.953434, 584.837241)
+묶인 객체 수=2
+두께 패널=True, 방향=Horizontal, 가로세로비=5.386
+  Handle=599, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+  Handle=600, Type=DIMENSION, Layer=치수, ColorIndex=4
+
+[패널 8]
+기준 Handle=551, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+기준 Bounds=(1011.653434, 280.318353) ~ (1210.953434, 479.618353)
+검색 Bounds=(981.653434, 250.318353) ~ (1240.953434, 509.618353)
+묶인 객체 수=16
+두께 패널=False, 방향=None, 가로세로비=1.000
+  Handle=516, Type=DIMENSION, Layer=치수, ColorIndex=4
+  Handle=551, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+  Handle=553, Type=CIRCLE, Layer=치구, ColorIndex=7
+  Handle=554, Type=CIRCLE, Layer=치구, ColorIndex=7
+  Handle=556, Type=CIRCLE, Layer=치구, ColorIndex=7
+  Handle=557, Type=CIRCLE, Layer=치구, ColorIndex=7
+  Handle=558, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=559, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=560, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=561, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=562, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=6
+  Handle=563, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=6
+  Handle=564, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=565, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=6
+  Handle=566, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=6
+  Handle=601, Type=DIMENSION, Layer=치수, ColorIndex=4
+
+[패널 9]
+기준 Handle=545, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+기준 Bounds=(1011.653434, 205.099464) ~ (1210.953434, 242.099464)
+검색 Bounds=(981.653434, 175.099464) ~ (1240.953434, 272.099464)
+묶인 객체 수=2
+두께 패널=True, 방향=Horizontal, 가로세로비=5.386
+  Handle=545, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+  Handle=546, Type=DIMENSION, Layer=치수, ColorIndex=4
+
+[패널 10]
+기준 Handle=550, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+기준 Bounds=(1251.203434, 297.718353) ~ (1288.203434, 462.218353)
+검색 Bounds=(1221.203434, 267.718353) ~ (1318.203434, 492.218353)
+묶인 객체 수=3
+두께 패널=True, 방향=Vertical, 가로세로비=4.446
+  Handle=550, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+  Handle=552, Type=DIMENSION, Layer=치수, ColorIndex=4
+  Handle=555, Type=DIMENSION, Layer=치수, ColorIndex=4
+
+[패널 11]
+기준 Handle=547, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+기준 Bounds=(1432.653434, 301.318353) ~ (1589.953434, 458.618353)
+검색 Bounds=(1402.653434, 271.318353) ~ (1619.953434, 488.618353)
+묶인 객체 수=11
+두께 패널=False, 방향=None, 가로세로비=1.000
+  Handle=547, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+  Handle=549, Type=DIMENSION, Layer=치수, ColorIndex=4
+  Handle=567, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=568, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=6
+  Handle=569, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=6
+  Handle=570, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=571, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=572, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=573, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=6
+  Handle=574, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=6
+  Handle=597, Type=DIMENSION, Layer=치수, ColorIndex=4
+
+[패널 12]
+기준 Handle=575, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+기준 Bounds=(1814.653434, 283.318353) ~ (2007.953434, 476.618353)
+검색 Bounds=(1784.653434, 253.318353) ~ (2037.953434, 506.618353)
+묶인 객체 수=15
+두께 패널=False, 방향=None, 가로세로비=1.000
+  Handle=575, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+  Handle=576, Type=DIMENSION, Layer=치수, ColorIndex=4
+  Handle=577, Type=CIRCLE, Layer=치구, ColorIndex=7
+  Handle=578, Type=CIRCLE, Layer=치구, ColorIndex=7
+  Handle=579, Type=CIRCLE, Layer=치구, ColorIndex=7
+  Handle=580, Type=CIRCLE, Layer=치구, ColorIndex=7
+  Handle=581, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=6
+  Handle=582, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=583, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=584, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=6
+  Handle=585, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=6
+  Handle=586, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=587, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=588, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=6
+  Handle=602, Type=DIMENSION, Layer=치수, ColorIndex=4
+
+[패널 13]
+기준 Handle=604, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+기준 Bounds=(2211.903434, 280.318353) ~ (2411.203434, 479.618353)
+검색 Bounds=(2181.903434, 250.318353) ~ (2441.203434, 509.618353)
+묶인 객체 수=12
+두께 패널=False, 방향=None, 가로세로비=1.000
+  Handle=603, Type=DIMENSION, Layer=치수, ColorIndex=4
+  Handle=604, Type=LWPOLYLINE, Layer=치구, ColorIndex=7
+  Handle=605, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=606, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=6
+  Handle=607, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=608, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=609, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=6
+  Handle=610, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=611, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=3
+  Handle=612, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=6
+  Handle=613, Type=CIRCLE, Layer=볼트 구멍, ColorIndex=6
+  Handle=614, Type=DIMENSION, Layer=치수, ColorIndex=4
+
