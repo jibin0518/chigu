@@ -28,6 +28,7 @@ namespace DwgAutoResize;
 /// </summary>
 internal static class Program
 {
+
     [STAThread]
     private static void Main()
     {
@@ -62,19 +63,18 @@ internal static class Program
 
             // 패널 기준 객체:
             // Layer="치구", POLYLINE 계열, 실제 표시 색상=흰색(ACI 7)
-            // 기준 폴리선의 외곽을 사방 12만큼 확장한 범위에
+            // 기준 폴리선의 외곽을 사방 25만큼 확장한 범위에
             // 걸치는 모든 객체를 같은 패널로 묶는다.
             List<PanelGroup> panelGroups = FindPanelGroups(
                 drawingData,
-                25.0
+                30.0
             );
 
             // 두께 패널은 도면에 있을 수도 있고 없을 수도 있다.
             // 가로/세로 비율이 충분히 큰 패널만 선택적으로 두께 패널로 표시한다.
             // 해당 조건을 만족하는 패널이 하나도 없어도 예외 없이 계속 진행한다.
             ClassifyThicknessPanels(
-                panelGroups,
-                2.0
+                panelGroups
             );
 
             string panelReportPath = Path.Combine(
@@ -102,7 +102,27 @@ internal static class Program
                 return;
             }
 
+            // 목표 높이(두께)가 36 이하이면 두께 패널 묶음을 통째로 삭제한다.
+            // 기준 외곽뿐 아니라 빨간 박스, 치수 및 패널에 묶인 모든 객체를 제거하고
+            // 이후 크기 수정과 50 간격 재배치 대상에서도 제외한다.
+            double effectiveTargetThickness =
+                resizeInput.TargetThickness ??
+                currentValues.Thickness ??
+                double.PositiveInfinity;
+
+            bool thicknessPanelsRemoved =
+                effectiveTargetThickness <= 36.0;
+
+            if (thicknessPanelsRemoved)
+            {
+                RemoveThicknessPanelGroups(
+                    drawingData,
+                    panelGroups
+                );
+            }
+
             ApplyPanelResize(
+                drawingData,
                 panelGroups,
                 currentValues,
                 resizeInput
@@ -112,7 +132,7 @@ internal static class Program
             // 왼쪽부터 패널 사이 간격을 정확히 50으로 재배치한다.
             ArrangePanelGroupsWithGap(
                 panelGroups,
-                60.0
+                50.0
             );
 
             string outputPath = Path.Combine(
@@ -135,9 +155,11 @@ internal static class Program
                 $"저장 위치: {outputPath}\n\n" +
                 $"X: {currentValues.Width:0.###} → {resizeInput.TargetWidth:0.###}\n" +
                 $"Y: {currentValues.Height:0.###} → {resizeInput.TargetHeight:0.###}\n" +
-                (resizeInput.TargetThickness.HasValue && currentValues.Thickness.HasValue
-                    ? $"두께: {currentValues.Thickness.Value:0.###} → {resizeInput.TargetThickness.Value:0.###}"
-                    : "두께 패널 없음"),
+                (thicknessPanelsRemoved
+                    ? "두께: 목표값 36 이하 — 두께 패널 삭제"
+                    : resizeInput.TargetThickness.HasValue && currentValues.Thickness.HasValue
+                        ? $"두께: {currentValues.Thickness.Value:0.###} → {resizeInput.TargetThickness.Value:0.###}"
+                        : "두께 패널 없음"),
                 "완료",
                 MessageBoxButtons.OK,
                 MessageBoxIcon.Information
@@ -643,8 +665,8 @@ internal static class Program
             .Where(x => x.HasBoundingBox)
             .ToList();
 
-        // 다른 흰색 치구 폴리선 안에 완전히 들어가는 사각형은
-        // 독립 패널 기준이 아니라 내부 사각형으로 취급한다.
+        // 다른 흰색 치구 폴리선 안에 완전히 들어가는 일반 사각형은
+        // 독립 일반 패널 기준이 아니라 내부 사각형으로 취급한다.
         List<EntityData> allPanelBases = allWhiteChiguPolylines
             .Where(candidate =>
                 !allWhiteChiguPolylines.Any(other =>
@@ -654,24 +676,31 @@ internal static class Program
             )
             .ToList();
 
-        // 가로/세로 비율이 큰 두께 패널 기준을 먼저 처리한다.
-        List<EntityData> thicknessPanelBases = allPanelBases
-            .Where(x => IsThicknessPanelBase(
-                x,
-                minimumThicknessAspectRatio
-            ))
+        // 두께 패널은 개수 제한 없이 원본 흰색 치구 폴리선 전체에서 먼저 찾는다.
+        // 가로와 세로가 모두 100 이하이면 비율 1.5, 그 외에는 2.0을 적용한다.
+        List<EntityData> thicknessPanelBases = allWhiteChiguPolylines
+            .Where(IsThicknessPanelBase)
             .OrderBy(x => x.MinX)
             .ThenByDescending(x => x.MaxY)
             .ToList();
 
+        // 일반 패널 후보에서는 이미 두께 패널로 판정된 기준 객체를 제외한다.
+        HashSet<string> thicknessBaseHandles = thicknessPanelBases
+            .Select(x => x.Handle)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         List<EntityData> normalPanelBases = allPanelBases
-            .Where(x => !IsThicknessPanelBase(
-                x,
-                minimumThicknessAspectRatio
-            ))
+            .Where(x => !thicknessBaseHandles.Contains(x.Handle))
             .OrderBy(x => x.MinX)
             .ThenByDescending(x => x.MaxY)
             .ToList();
+
+        // 모든 기준 폴리선 Handle을 따로 기억한다.
+        // 어느 패널이 먼저 처리되더라도 다른 패널의 기준 객체는 사용 완료로 막지 않는다.
+        HashSet<string> panelBaseHandles = thicknessPanelBases
+            .Concat(normalPanelBases)
+            .Select(x => x.Handle)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
         List<PanelGroup> result = new();
 
@@ -686,9 +715,13 @@ internal static class Program
             bool isThicknessPanel
         )
         {
-            // 이전에 확정된 패널에 기준 폴리선이 이미 포함되어 있으면
-            // 새로운 패널 기준으로 사용하지 않는다.
-            if (assignedHandles.Contains(panelBase.Handle))
+            // 같은 기준 객체를 중복 등록하는 것만 막는다.
+            // 다른 패널이 먼저 주변 객체를 잡았더라도 기준 폴리선 자체는 계속 검사한다.
+            if (result.Any(panel =>
+                    string.Equals(
+                        panel.BasePolyline.Handle,
+                        panelBase.Handle,
+                        StringComparison.OrdinalIgnoreCase)))
             {
                 return;
             }
@@ -699,8 +732,12 @@ internal static class Program
             double searchMaxY = panelBase.MaxY + searchMargin;
 
             List<EntityData> members = drawingData.Entities
-                // 이미 다른 확정 패널에 들어간 객체는 자동 검색에서 제외한다.
-                .Where(x => !assignedHandles.Contains(x.Handle))
+                // 기준 폴리선은 assignedHandles 상태와 관계없이 항상 포함한다.
+                // 다른 패널 기준 객체 역시 선점 대상에서 제외해 패널 개수 제한이 생기지 않게 한다.
+                .Where(x =>
+                    ReferenceEquals(x, panelBase) ||
+                    panelBaseHandles.Contains(x.Handle) ||
+                    !assignedHandles.Contains(x.Handle))
                 .Where(x => IsEntityInsideOrTouchingBounds(
                     x,
                     searchMinX,
@@ -721,7 +758,7 @@ internal static class Program
                 .ToList();
 
             // 기준 폴리선을 포함해 객체가 3개 이상인 경우만 패널로 확정한다.
-            if (members.Count < 3)
+            if (members.Count < 2)
             {
                 return;
             }
@@ -749,10 +786,16 @@ internal static class Program
 
             result.Add(panel);
 
-            // 이 패널에 정리된 모든 객체는 이후 패널 자동 탐색에서 제외한다.
+            // 일반 구성 객체만 이후 패널 자동 탐색에서 제외한다.
+            // 다른 패널의 기준 폴리선은 절대 assignedHandles에 넣지 않아
+            // 두께 패널이 몇 개든 모두 독립적으로 인식되게 한다.
             foreach (EntityData member in members)
             {
-                assignedHandles.Add(member.Handle);
+                if (!panelBaseHandles.Contains(member.Handle) ||
+                    ReferenceEquals(member, panelBase))
+                {
+                    assignedHandles.Add(member.Handle);
+                }
             }
         }
 
@@ -786,14 +829,6 @@ internal static class Program
         }
 
         return result;
-    }
-
-    private static bool IsThicknessPanelBase(
-        EntityData panelBase,
-        double minimumAspectRatio
-    )
-    {
-        return GetPanelAspectRatio(panelBase) >= minimumAspectRatio;
     }
 
     private static double GetPanelAspectRatio(
@@ -842,44 +877,37 @@ internal static class Program
     /// 두께 패널이 없는 도면에서는 모든 패널이 None으로 유지되며 예외를 발생시키지 않는다.
     /// </summary>
     private static void ClassifyThicknessPanels(
-        IEnumerable<PanelGroup> panels,
-        double minimumAspectRatio = 2.0
+        IEnumerable<PanelGroup> panels
     )
     {
-        if (minimumAspectRatio <= 1.0)
-        {
-            throw new ArgumentOutOfRangeException(
-                nameof(minimumAspectRatio),
-                "두께 패널 판별 비율은 1보다 커야 합니다."
-            );
-        }
-
         foreach (PanelGroup panel in panels)
         {
-            double width = panel.BasePolyline.Width;
-            double height = panel.BasePolyline.Height;
+            DimensionBounds bounds =
+                GetCurrentBounds(panel.BasePolyline.Entity);
+
+            double width = bounds.MaxX - bounds.MinX;
+            double height = bounds.MaxY - bounds.MinY;
 
             panel.IsThicknessPanel = false;
             panel.ThicknessDirection = ThicknessPanelDirection.None;
             panel.AspectRatio = 0.0;
 
-            if (width <= 0.0 || height <= 0.0)
-            {
-                continue;
-            }
-
             double longSide = Math.Max(width, height);
             double shortSide = Math.Min(width, height);
 
-            if (shortSide <= 0.0)
+            if (shortSide <= 0.000001)
             {
                 continue;
             }
 
             double aspectRatio = longSide / shortSide;
+            double minimumAspectRatio =
+                width <= 100.0 && height <= 100.0
+                    ? 1.5
+                    : 2.0;
+
             panel.AspectRatio = aspectRatio;
 
-            // 가로와 세로 차이가 충분하지 않으면 일반 패널이다.
             if (aspectRatio < minimumAspectRatio)
             {
                 continue;
@@ -967,6 +995,8 @@ internal static class Program
         };
     }
 
+
+
     private static void SavePanelGroupReport(
         IReadOnlyList<PanelGroup> panelGroups,
         string outputPath
@@ -979,7 +1009,7 @@ internal static class Program
 
         writer.WriteLine($"찾은 패널 수: {panelGroups.Count}");
         writer.WriteLine("기준: Layer=치구, POLYLINE, ColorIndex=7(흰색)");
-        writer.WriteLine("포함 범위: 기준 폴리선 바운딩박스 사방 12");
+        writer.WriteLine("포함 범위: 기준 폴리선 바운딩박스 사방 25");
         writer.WriteLine();
 
         foreach (PanelGroup panel in panelGroups)
@@ -1423,11 +1453,115 @@ internal static class Program
 
 
     /// <summary>
+    /// 목표 높이가 36 이하일 때 모든 두께 패널 묶음을 DWG에서 삭제한다.
+    /// 패널 기준 폴리선뿐 아니라 빨간 박스, 치수 및 묶인 모든 객체를 제거하며,
+    /// 삭제된 패널은 이후 크기 변경과 재배치 목록에서도 제외한다.
+    /// </summary>
+    private static void RemoveThicknessPanelGroups(
+        DrawingData drawingData,
+        List<PanelGroup> panelGroups
+    )
+    {
+        // 저장된 분류값만 믿지 않고 기준 폴리선의 실제 현재 외곽 비율로
+        // 두께 패널을 다시 판별한다. 분류가 누락되어도 삭제되게 한다.
+        List<PanelGroup> thicknessPanels = panelGroups
+        .Where(panel =>
+        {
+            DimensionBounds bounds =
+                GetCurrentBounds(panel.BasePolyline.Entity);
+
+            double width =
+                bounds.MaxX - bounds.MinX;
+
+            double height =
+                bounds.MaxY - bounds.MinY;
+
+            double longSide =
+                Math.Max(width, height);
+
+            double shortSide =
+                Math.Min(width, height);
+
+            if (shortSide <= 0.000001)
+            {
+                return false;
+            }
+
+            double aspectRatio =
+                longSide / shortSide;
+
+            double minimumAspectRatio =
+                width <= 105.0 &&
+                height <= 105.0
+                    ? 1.5
+                    : 2.0;
+
+            return aspectRatio >= minimumAspectRatio;
+        })
+        .ToList();
+
+    if (thicknessPanels.Count == 0)
+    {
+        return;
+    }
+
+        HashSet<Entity> entitiesToRemove = thicknessPanels
+            .SelectMany(panel => panel.Entities
+                .Append(panel.BasePolyline))
+            .Select(data => data.Entity)
+            .ToHashSet();
+
+        foreach (Entity entity in entitiesToRemove)
+        {
+            if (drawingData.Document.Entities.Contains(entity))
+            {
+                drawingData.Document.Entities.Remove(entity);
+                continue;
+            }
+
+            foreach (var blockRecord in drawingData.Document.BlockRecords)
+            {
+                if (blockRecord.Entities.Contains(entity))
+                {
+                    blockRecord.Entities.Remove(entity);
+                    break;
+                }
+            }
+        }
+
+        drawingData.Entities.RemoveAll(data =>
+            entitiesToRemove.Contains(data.Entity));
+
+        HashSet<PanelGroup> removedPanels =
+            thicknessPanels.ToHashSet();
+
+        panelGroups.RemoveAll(panel =>
+            removedPanels.Contains(panel));
+
+        // 삭제 후 남은 일반 패널 번호를 왼쪽부터 다시 지정한다.
+        List<PanelGroup> ordered = panelGroups
+            .OrderBy(panel =>
+                GetCurrentBounds(panel.BasePolyline.Entity).MinX)
+            .ThenBy(panel =>
+                GetCurrentBounds(panel.BasePolyline.Entity).MinY)
+            .ToList();
+
+        panelGroups.Clear();
+        panelGroups.AddRange(ordered);
+
+        for (int index = 0; index < panelGroups.Count; index++)
+        {
+            panelGroups[index].Number = index + 1;
+        }
+    }
+
+    /// <summary>
     /// 모든 패널을 중심 기준으로 수정한다.
     /// 일반 패널은 X/Y 변화량을 사용하고, 두께 패널은 긴 방향과 짧은 방향을 구분한다.
     /// "볼트 구멍" 레이어 객체는 크기와 위치를 모두 유지한다.
     /// </summary>
     private static void ApplyPanelResize(
+        DrawingData drawingData,
         IReadOnlyList<PanelGroup> panelGroups,
         CurrentDimensionValues current,
         ResizeInput input
@@ -1442,7 +1576,8 @@ internal static class Program
 
         HashSet<string> processedHandles = new();
 
-        foreach (PanelGroup panel in panelGroups)
+        // 모든 패널의 일반 크기 변경과 모서리 구멍 변경을 먼저 끝낸다.
+        foreach (PanelGroup panel in panelGroups.OrderBy(x => x.Number))
         {
             double panelWidthDelta;
             double panelHeightDelta;
@@ -1474,6 +1609,15 @@ internal static class Program
                 processedHandles
             );
         }
+
+        // 이전 정상 코드와 같은 방식:
+        // 꼭짓점 16개 패널 자체의 구멍을 기준으로 하지 않는다.
+        // 왼쪽에 있는 가장 가까운 '모서리 구멍 패널'의 최종 반지름과,
+        // 바로 앞 '내부 흰색 사각형'의 최종 크기를 기준으로 외곽을 재생성한다.
+        RebuildVertex16PanelsFromPreviousPanels(
+            drawingData,
+            panelGroups
+        );
     }
 
     private static void ResizeSinglePanel(
@@ -1491,6 +1635,9 @@ internal static class Program
             basePolyline.MaxX,
             basePolyline.MaxY
         );
+
+        HashSet<string> resizableHoleHandles =
+            FindResizableCornerHoleHandles(panel);
 
         DimensionBounds newBounds = new(
             oldBounds.MinX - widthDelta / 2.0,
@@ -1538,8 +1685,46 @@ internal static class Program
                 continue;
             }
 
-            // 패널 내부에 있는 흰색 닫힌 사각형은 단순 이동하지 않고
-            // 기준 패널과 같은 가로/세로 변화량으로 중심 기준 크기를 변경한다.
+            if (resizableHoleHandles.Contains(entity.Handle) &&
+                entity.Entity is Circle holeCircle)
+            {
+                ResizeAndMoveCornerHole(
+                    entity,
+                    holeCircle,
+                    basePolyline,
+                    widthDelta,
+                    heightDelta
+                );
+
+                continue;
+            }
+
+            // 상·하 가로형 두께 패널 안의 빨간 사각형은
+            // 단순 이동만 하지 않고 두께 변화량만큼 세로 크기도 변경한다.
+            // 가로 방향은 패널 폭 변화에 맞춰 좌우로 이동한다.
+            if (IsHorizontalThicknessPanelRedBlock(panel, entity))
+            {
+                ResizePolylineFromCenter(
+                    entity,
+                    0.0,
+                    heightDelta
+                );
+
+                double redBlockMoveX = GetDirectionalMove(
+                    entity.CenterBoxX,
+                    basePolyline.CenterBoxX,
+                    widthDelta
+                );
+
+                MoveEntity(
+                    entity.Entity,
+                    redBlockMoveX,
+                    0.0
+                );
+
+                continue;
+            }
+
             if (IsInnerWhiteRectangle(panel, entity))
             {
                 ResizePolylineFromCenter(
@@ -1571,10 +1756,486 @@ internal static class Program
         }
     }
 
+    private static void RebuildVertex16PanelsFromPreviousPanels(
+        DrawingData drawingData,
+        IReadOnlyList<PanelGroup> panelGroups
+    )
+    {
+        List<PanelGroup> normalPanels = panelGroups
+            .Where(panel => !panel.IsThicknessPanel)
+            .OrderBy(panel => GetCurrentBounds(panel.BasePolyline.Entity).MinX)
+            .ToList();
+
+        List<PanelGroup> specialPanels = normalPanels
+            .Where(panel =>
+                panel.BasePolyline.Entity is LwPolyline polyline &&
+                panel.BasePolyline.Vertices.Count == 16 &&
+                polyline.Vertices.Count == 16)
+            .ToList();
+
+        foreach (PanelGroup specialPanel in specialPanels)
+        {
+            DimensionBounds specialBounds =
+                GetCurrentBounds(specialPanel.BasePolyline.Entity);
+
+            double specialCenterX =
+                (specialBounds.MinX + specialBounds.MaxX) / 2.0;
+
+            List<PanelGroup> panelsOnLeft = normalPanels
+                .Where(panel => !ReferenceEquals(panel, specialPanel))
+                .Where(panel =>
+                {
+                    DimensionBounds bounds =
+                        GetCurrentBounds(panel.BasePolyline.Entity);
+
+                    double centerX =
+                        (bounds.MinX + bounds.MaxX) / 2.0;
+
+                    return centerX < specialCenterX;
+                })
+                .OrderByDescending(panel =>
+                    GetCurrentBounds(panel.BasePolyline.Entity).MaxX)
+                .ToList();
+
+            // 이전 코드의 secondPanelCircles 역할:
+            // 왼쪽 패널 중 모서리 치구 원을 가진 가장 가까운 패널을 찾는다.
+            PanelGroup? holeSourcePanel = panelsOnLeft
+                .FirstOrDefault(panel =>
+                    FindResizableCornerHoleHandles(panel).Count >= 2);
+
+            if (holeSourcePanel == null)
+            {
+                continue;
+            }
+
+            HashSet<string> holeHandles =
+                FindResizableCornerHoleHandles(holeSourcePanel);
+
+            Circle? radiusSource = holeSourcePanel.Entities
+                .Where(entity => holeHandles.Contains(entity.Handle))
+                .Select(entity => entity.Entity)
+                .OfType<Circle>()
+                .OrderByDescending(circle => circle.Radius)
+                .FirstOrDefault();
+
+            if (radiusSource == null)
+            {
+                continue;
+            }
+
+            // 이전 코드의 thirdInnerBox 역할:
+            // 특수 패널 바로 왼쪽에서 내부 흰색 사각형을 가진 가장 가까운 패널을 찾는다.
+            EntityData? innerRectangle = panelsOnLeft
+                .SelectMany(panel => panel.Entities
+                    .Where(entity => IsInnerWhiteRectangle(panel, entity))
+                    .Select(entity => new
+                    {
+                        Panel = panel,
+                        Entity = entity,
+                        Right = GetCurrentBounds(panel.BasePolyline.Entity).MaxX
+                    }))
+                .OrderByDescending(item => item.Right)
+                .Select(item => item.Entity)
+                .FirstOrDefault();
+
+            RebuildVertex16PanelLikeOldFourthPanel(
+                drawingData,
+                specialPanel,
+                innerRectangle,
+                radiusSource.Radius
+            );
+        }
+    }
+
+    private static void RebuildVertex16PanelLikeOldFourthPanel(
+        DrawingData drawingData,
+        PanelGroup panel,
+        EntityData? resizedInnerRectangle,
+        double holeRadius
+    )
+    {
+        EntityData oldPanelData = panel.BasePolyline;
+
+        if (oldPanelData.Entity is not LwPolyline oldPolyline ||
+            oldPolyline.Vertices.Count != 16)
+        {
+            return;
+        }
+
+        double smallRadius = holeRadius - 4.0;
+        double cornerLength =
+            holeRadius + smallRadius * 2.0;
+
+        if (smallRadius <= 0.0)
+        {
+            throw new Exception(
+                $"16꼭짓점 패널 수정에 사용할 구멍 반지름이 너무 작습니다. " +
+                $"Panel={oldPanelData.Handle}, Radius={holeRadius}"
+            );
+        }
+
+        DimensionBounds oldPanelBounds =
+            GetCurrentBounds(oldPolyline);
+
+        double targetWidth;
+        double targetHeight;
+
+        if (resizedInnerRectangle != null)
+        {
+            DimensionBounds innerBounds =
+                GetCurrentBounds(resizedInnerRectangle.Entity);
+
+            // 이전 정상 코드와 동일하게 내부 사각형보다 사방 4,
+            // 전체 가로/세로는 각각 8 작게 만든다.
+            targetWidth =
+                (innerBounds.MaxX - innerBounds.MinX) - 8.0;
+
+            targetHeight =
+                (innerBounds.MaxY - innerBounds.MinY) - 8.0;
+        }
+        else
+        {
+            // 내부 사각형을 찾지 못한 도면은 현재 특수 패널 크기를 유지한다.
+            targetWidth =
+                oldPanelBounds.MaxX - oldPanelBounds.MinX;
+
+            targetHeight =
+                oldPanelBounds.MaxY - oldPanelBounds.MinY;
+        }
+
+        if (targetWidth <= cornerLength * 2.0 ||
+            targetHeight <= cornerLength * 2.0)
+        {
+            throw new Exception(
+                $"16꼭짓점 패널을 다시 만들 공간이 부족합니다. " +
+                $"Panel={oldPanelData.Handle}, " +
+                $"Target={targetWidth}x{targetHeight}, " +
+                $"CornerLength={cornerLength}"
+            );
+        }
+
+        double centerX =
+            (oldPanelBounds.MinX + oldPanelBounds.MaxX) / 2.0;
+
+        double centerY =
+            (oldPanelBounds.MinY + oldPanelBounds.MaxY) / 2.0;
+
+        double minX = centerX - targetWidth / 2.0;
+        double maxX = centerX + targetWidth / 2.0;
+        double minY = centerY - targetHeight / 2.0;
+        double maxY = centerY + targetHeight / 2.0;
+
+        const double quarterArcBulge =
+            0.4142135623730950488;
+
+        LwPolyline replacement = new()
+        {
+            IsClosed = true,
+            Layer = oldPolyline.Layer,
+            Color = oldPolyline.Color,
+            LineType = oldPolyline.LineType,
+            LineTypeScale = oldPolyline.LineTypeScale
+        };
+
+        AddVertex16PanelPoint(replacement, minX, minY + cornerLength, quarterArcBulge);
+        AddVertex16PanelPoint(replacement, minX + smallRadius, minY + smallRadius + holeRadius, -quarterArcBulge);
+        AddVertex16PanelPoint(replacement, minX + smallRadius + holeRadius, minY + smallRadius, quarterArcBulge);
+        AddVertex16PanelPoint(replacement, minX + cornerLength, minY, 0.0);
+
+        AddVertex16PanelPoint(replacement, maxX - cornerLength, minY, quarterArcBulge);
+        AddVertex16PanelPoint(replacement, maxX - smallRadius - holeRadius, minY + smallRadius, -quarterArcBulge);
+        AddVertex16PanelPoint(replacement, maxX - smallRadius, minY + smallRadius + holeRadius, quarterArcBulge);
+        AddVertex16PanelPoint(replacement, maxX, minY + cornerLength, 0.0);
+
+        AddVertex16PanelPoint(replacement, maxX, maxY - cornerLength, quarterArcBulge);
+        AddVertex16PanelPoint(replacement, maxX - smallRadius, maxY - smallRadius - holeRadius, -quarterArcBulge);
+        AddVertex16PanelPoint(replacement, maxX - smallRadius - holeRadius, maxY - smallRadius, quarterArcBulge);
+        AddVertex16PanelPoint(replacement, maxX - cornerLength, maxY, 0.0);
+
+        AddVertex16PanelPoint(replacement, minX + cornerLength, maxY, quarterArcBulge);
+        AddVertex16PanelPoint(replacement, minX + smallRadius + holeRadius, maxY - smallRadius, -quarterArcBulge);
+        AddVertex16PanelPoint(replacement, minX + smallRadius, maxY - smallRadius - holeRadius, quarterArcBulge);
+        AddVertex16PanelPoint(replacement, minX, maxY - cornerLength, 0.0);
+
+        CadDocument document = drawingData.Document;
+
+        document.Entities.Remove(oldPolyline);
+        drawingData.Entities.Remove(oldPanelData);
+        document.Entities.Add(replacement);
+
+        EntityData replacementData =
+            CreateEntityData(replacement);
+
+        drawingData.Entities.Add(replacementData);
+
+        int memberIndex = panel.Entities.FindIndex(entity =>
+            ReferenceEquals(entity, oldPanelData) ||
+            ReferenceEquals(entity.Entity, oldPolyline)
+        );
+
+        if (memberIndex >= 0)
+        {
+            panel.Entities[memberIndex] = replacementData;
+        }
+        else
+        {
+            panel.Entities.Add(replacementData);
+        }
+
+        panel.BasePolyline = replacementData;
+    }
+
+    /// <summary>
+    /// 일반 패널 내부의 치구 레이어 원 중 패널 중심에서 가장 먼 원 최대 4개를
+    /// 크기 변경 대상 모서리 구멍으로 선택한다.
+    /// 볼트 구멍 레이어와 두께 패널의 원은 제외한다.
+    /// </summary>
+    private static HashSet<string> FindResizableCornerHoleHandles(
+        PanelGroup panel
+    )
+    {
+        if (panel.IsThicknessPanel)
+        {
+            return new HashSet<string>();
+        }
+
+        List<EntityData> candidates = panel.Entities
+            .Where(entity => entity.Entity is Circle)
+            .Where(entity =>
+                !string.Equals(
+                    entity.LayerName,
+                    "볼트 구멍",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+            .Where(entity =>
+                string.Equals(
+                    entity.LayerName,
+                    "치구",
+                    StringComparison.OrdinalIgnoreCase
+                )
+            )
+            .Where(entity =>
+                entity.CenterX >= panel.BasePolyline.MinX &&
+                entity.CenterX <= panel.BasePolyline.MaxX &&
+                entity.CenterY >= panel.BasePolyline.MinY &&
+                entity.CenterY <= panel.BasePolyline.MaxY
+            )
+            .OrderByDescending(entity =>
+            {
+                double dx =
+                    entity.CenterX - panel.BasePolyline.CenterBoxX;
+
+                double dy =
+                    entity.CenterY - panel.BasePolyline.CenterBoxY;
+
+                return dx * dx + dy * dy;
+            })
+            .Take(4)
+            .ToList();
+
+        // 모서리 구멍은 최소 두 개 이상 발견됐을 때만 크기를 변경한다.
+        // 중앙에 원 하나만 있는 도면을 잘못 수정하는 것을 방지한다.
+        if (candidates.Count < 2)
+        {
+            return new HashSet<string>();
+        }
+
+        return candidates
+            .Select(entity => entity.Handle)
+            .ToHashSet();
+    }
+
+    /// <summary>
+    /// 전 버전의 ResizeAndMoveCornerCircles와 같은 방식으로 처리한다.
+    /// 패널 크기 변화율의 평균으로 새 반지름을 구한 뒤 5단위로 반올림하고,
+    /// 반지름 변화분만큼 중심을 안쪽으로 보정해 외곽 쪽 간격이 유지되게 한다.
+    /// </summary>
+    private static bool ResizeAndMoveCornerHole(
+        EntityData circleData,
+        Circle circle,
+        EntityData originalPanel,
+        double widthDelta,
+        double heightDelta
+    )
+    {
+        double originalWidth = originalPanel.Width;
+        double originalHeight = originalPanel.Height;
+
+        double targetWidth = originalWidth + widthDelta;
+        double targetHeight = originalHeight + heightDelta;
+
+        if (originalWidth <= 0.0 ||
+            originalHeight <= 0.0 ||
+            targetWidth <= 0.0 ||
+            targetHeight <= 0.0)
+        {
+            throw new Exception(
+                $"구멍 크기 계산에 사용할 패널 크기가 잘못되었습니다. " +
+                $"Panel={originalPanel.Handle}, " +
+                $"Original={originalWidth}x{originalHeight}, " +
+                $"Target={targetWidth}x{targetHeight}"
+            );
+        }
+
+        double widthScale = targetWidth / originalWidth;
+        double heightScale = targetHeight / originalHeight;
+        double averageScale = (widthScale + heightScale) / 2.0;
+
+        double oldRadius = circle.Radius;
+        double newRadius = 5.0 * Math.Round(
+            oldRadius * averageScale / 5.0,
+            MidpointRounding.AwayFromZero
+        );
+
+        // 너무 작아져 0이 되는 경우를 막는다.
+        newRadius = Math.Max(5.0, newRadius);
+
+        double radiusDifference = newRadius - oldRadius;
+        double moveX = 0.0;
+        double moveY = 0.0;
+
+        bool isLeft =
+            circleData.CenterX < originalPanel.CenterBoxX;
+
+        bool isRight =
+            circleData.CenterX > originalPanel.CenterBoxX;
+
+        bool isTop =
+            circleData.CenterY > originalPanel.CenterBoxY;
+
+        bool isBottom =
+            circleData.CenterY < originalPanel.CenterBoxY;
+
+        // 패널 자체의 크기 변화에 따른 이동.
+        if (isLeft)
+        {
+            moveX -= widthDelta / 2.0;
+        }
+        else if (isRight)
+        {
+            moveX += widthDelta / 2.0;
+        }
+
+        if (isTop)
+        {
+            moveY += heightDelta / 2.0;
+        }
+        else if (isBottom)
+        {
+            moveY -= heightDelta / 2.0;
+        }
+
+        // 반지름이 커지면 중심을 패널 안쪽으로 이동시켜
+        // 구멍 외곽과 패널 벽 사이의 관계를 유지한다.
+        if (isLeft)
+        {
+            moveX += radiusDifference;
+        }
+        else if (isRight)
+        {
+            moveX -= radiusDifference;
+        }
+
+        if (isTop)
+        {
+            moveY -= radiusDifference;
+        }
+        else if (isBottom)
+        {
+            moveY += radiusDifference;
+        }
+
+        circle.Radius = newRadius;
+        circle.Center = new XYZ(
+            circle.Center.X + moveX,
+            circle.Center.Y + moveY,
+            circle.Center.Z
+        );
+
+        return Math.Abs(newRadius - oldRadius) > 0.000001;
+    }
+
+    /// <summary>
+    /// 꼭짓점이 16개인 특수 패널을 변경된 모서리 구멍 반지름에 맞춰 다시 만든다.
+    /// 현재 수정된 패널 외곽 크기와 중심은 유지하고, 각 모서리를
+    /// (R-4), R, (R-4) 반지름의 90도 호 3개로 구성한다.
+    /// </summary>
+    private static void AddVertex16PanelPoint(
+        LwPolyline polyline,
+        double x,
+        double y,
+        double bulge
+    )
+    {
+        LwPolyline.Vertex vertex = new(
+            new XY(x, y)
+        )
+        {
+            Bulge = bulge
+        };
+
+        polyline.Vertices.Add(vertex);
+    }
+
     /// <summary>
     /// 패널 기준 폴리선 안쪽에 있는 흰색 닫힌 사각형인지 확인한다.
     /// 기준 폴리선 자기 자신과 볼트 구멍 레이어는 제외한다.
     /// </summary>
+    /// <summary>
+    /// 상·하 가로형 두께 패널 내부의 빨간 닫힌 사각형인지 확인한다.
+    /// 빨간색은 ACI 1 기준이며, 기준 두께 패널 자신과 볼트 구멍은 제외한다.
+    /// </summary>
+    private static bool IsHorizontalThicknessPanelRedBlock(
+        PanelGroup panel,
+        EntityData entity
+    )
+    {
+        if (!panel.IsThicknessPanel ||
+            panel.ThicknessDirection != ThicknessPanelDirection.Horizontal)
+        {
+            return false;
+        }
+
+        if (ReferenceEquals(entity, panel.BasePolyline))
+        {
+            return false;
+        }
+
+        if (string.Equals(
+                entity.LayerName,
+                "볼트 구멍",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (entity.Entity is not LwPolyline polyline)
+        {
+            return false;
+        }
+
+        if (!polyline.IsClosed || polyline.Vertices.Count != 4)
+        {
+            return false;
+        }
+
+        // AutoCAD 기본 빨간색 ACI 번호.
+        if (entity.ColorIndex != 1)
+        {
+            return false;
+        }
+
+        const double tolerance = 0.001;
+
+        // 빨간 박스 중심이 두께 패널의 기존 검색 범위 안에 있어야 한다.
+        return
+            entity.CenterBoxX >= panel.BasePolyline.MinX - tolerance &&
+            entity.CenterBoxX <= panel.BasePolyline.MaxX + tolerance &&
+            entity.CenterBoxY >= panel.BasePolyline.MinY - panel.SearchMargin - tolerance &&
+            entity.CenterBoxY <= panel.BasePolyline.MaxY + panel.SearchMargin + tolerance;
+    }
+
     private static bool IsInnerWhiteRectangle(
         PanelGroup panel,
         EntityData entity
@@ -2696,7 +3357,7 @@ internal static class Program
     internal sealed class PanelGroup
     {
         public int Number { get; set; }
-        public required EntityData BasePolyline { get; init; }
+        public required EntityData BasePolyline { get; set; }
         public double SearchMargin { get; init; }
         public double SearchMinX { get; init; }
         public double SearchMinY { get; init; }
@@ -2749,5 +3410,26 @@ internal static class Program
         public double Y { get; init; }
         public double Z { get; init; }
         public double Bulge { get; init; }
+    }
+
+    private static double GetThicknessAspectRatioThreshold(
+        EntityData panelBase
+    )
+    {
+        return panelBase.Width <= 100.0 &&
+            panelBase.Height <= 100.0
+            ? 1.5
+            : 2.0;
+    }
+
+    private static bool IsThicknessPanelBase(
+        EntityData panelBase
+    )
+    {
+        double ratio = GetPanelAspectRatio(panelBase);
+        double threshold =
+            GetThicknessAspectRatioThreshold(panelBase);
+
+        return ratio >= threshold;
     }
 }
