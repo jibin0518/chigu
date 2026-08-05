@@ -50,20 +50,21 @@ internal static class Program
 
             string fileName =
                 Path.GetFileNameWithoutExtension(dwgPath);
+            
+            //도형 위치 출력 txt 파일
+            // string reportPath = Path.Combine(
+            //     directory,
+            //     $"{fileName}_objects_v2.txt"
+            // );
 
-            string reportPath = Path.Combine(
-                directory,
-                $"{fileName}_objects_v2.txt"
-            );
-
-            SaveEntityReport(
-                drawingData,
-                reportPath
-            );
+            // SaveEntityReport(
+            //     drawingData,
+            //     reportPath
+            // );
 
             // 패널 기준 객체:
             // Layer="치구", POLYLINE 계열, 실제 표시 색상=흰색(ACI 7)
-            // 기준 폴리선의 외곽을 사방 25만큼 확장한 범위에
+            // 기준 폴리선의 외곽을 사방 30만큼 확장한 범위에
             // 걸치는 모든 객체를 같은 패널로 묶는다.
             List<PanelGroup> panelGroups = FindPanelGroups(
                 drawingData,
@@ -77,15 +78,16 @@ internal static class Program
                 panelGroups
             );
 
-            string panelReportPath = Path.Combine(
-                directory,
-                $"{fileName}_panels_v2.txt"
-            );
+            //패널안의 객체 출력 txt 파일
+            // string panelReportPath = Path.Combine(
+            //     directory,
+            //     $"{fileName}_panels_v2.txt"
+            // );
 
-            SavePanelGroupReport(
-                panelGroups,
-                panelReportPath
-            );
+            // SavePanelGroupReport(
+            //     panelGroups,
+            //     panelReportPath
+            // );
 
             // 수정 UI에 표시할 현재값은 폴리선 크기가 아니라 DWG 치수값으로 읽는다.
             // X/Y는 일반 패널 중 면적이 가장 큰 사각형 패널의 가로/세로 치수,
@@ -142,6 +144,11 @@ internal static class Program
             ArrangePanelGroupsWithGap(
                 panelGroups,
                 50.0
+            );
+
+            ShowBoltHoleClearanceWarnings(
+                panelGroups,
+                3.9
             );
 
             string outputPath = Path.Combine(
@@ -1451,20 +1458,21 @@ internal static class Program
 
 
 
-    private sealed class BoltHoleCirclePair
+    private sealed class BoltHoleCircleGroup
     {
-        public required EntityData OuterCircle { get; init; }
-        public required EntityData InnerCircle { get; init; }
+        public required List<EntityData> Circles { get; init; }
 
-        public double CenterX => OuterCircle.CenterX;
-        public double CenterY => OuterCircle.CenterY;
+        public double CenterX => Circles[0].CenterX;
+        public double CenterY => Circles[0].CenterY;
+        public int CircleCount => Circles.Count;
     }
 
     /// <summary>
-    /// 각 패널에서 같은 Y축 위치에 있는 볼트 구멍 4쌍을 찾는다.
-    /// 목표 가로가 120 이하이면 패널 중심에 가까운 2쌍만 유지하고,
-    /// 120 초과이면 중심에 가까운 2쌍을 삭제하여 바깥쪽 2쌍만 유지한다.
-    /// 한 쌍은 중심이 같고 반지름이 다른 "볼트 구멍" 레이어 원 2개다.
+    /// 한 패널의 같은 Y축 줄에 중심이 같은 볼트 구멍 그룹이 정확히 4개 있을 때 처리한다.
+    /// 중심당 원이 2개인 2·2·2·2 형식은 목표 가로 120을 기준으로,
+    /// 중심당 원이 3개인 3·3·3·3 형식은 목표 가로 140을 기준으로 처리한다.
+    /// 기준 이하이면 중심에 가까운 2그룹을 남기고 바깥 2그룹을 삭제하며,
+    /// 기준 초과이면 중심에 가까운 2그룹을 삭제한다.
     /// </summary>
     private static void SelectBoltHolePairsByTargetWidth(
         DrawingData drawingData,
@@ -1493,37 +1501,40 @@ internal static class Program
                 continue;
             }
 
-            List<BoltHoleCirclePair> pairs =
-                BuildBoltHoleCirclePairs(
+            List<BoltHoleCircleGroup> centerGroups =
+                BuildBoltHoleCenterGroups(
                     boltCircles,
                     centerTolerance
-                );
+                )
+                .Where(group =>
+                    group.CircleCount == 2 ||
+                    group.CircleCount == 3)
+                .ToList();
 
-            if (pairs.Count < 4)
+            if (centerGroups.Count < 4)
             {
                 continue;
             }
 
-            // 같은 Y축 줄별로 묶는다.
-            List<List<BoltHoleCirclePair>> yGroups = new();
+            List<List<BoltHoleCircleGroup>> yRows = new();
 
-            foreach (BoltHoleCirclePair pair in pairs
+            foreach (BoltHoleCircleGroup group in centerGroups
                 .OrderBy(item => item.CenterY)
                 .ThenBy(item => item.CenterX))
             {
-                List<BoltHoleCirclePair>? matchingGroup =
-                    yGroups.FirstOrDefault(group =>
-                        Math.Abs(group[0].CenterY - pair.CenterY)
+                List<BoltHoleCircleGroup>? matchingRow =
+                    yRows.FirstOrDefault(row =>
+                        Math.Abs(row[0].CenterY - group.CenterY)
                             <= yTolerance
                     );
 
-                if (matchingGroup == null)
+                if (matchingRow == null)
                 {
-                    matchingGroup = new List<BoltHoleCirclePair>();
-                    yGroups.Add(matchingGroup);
+                    matchingRow = new List<BoltHoleCircleGroup>();
+                    yRows.Add(matchingRow);
                 }
 
-                matchingGroup.Add(pair);
+                matchingRow.Add(group);
             }
 
             DimensionBounds panelBounds =
@@ -1532,19 +1543,33 @@ internal static class Program
             double panelCenterX =
                 (panelBounds.MinX + panelBounds.MaxX) / 2.0;
 
-            foreach (List<BoltHoleCirclePair> row in yGroups
-                .Where(group => group.Count == 4))
+            foreach (List<BoltHoleCircleGroup> row in yRows
+                .Where(row => row.Count == 4))
             {
-                List<BoltHoleCirclePair> orderedByCenterDistance = row
-                    .OrderBy(pair =>
-                        Math.Abs(pair.CenterX - panelCenterX))
+                bool isTwoCirclePattern =
+                    row.All(group => group.CircleCount == 2);
+
+                bool isThreeCirclePattern =
+                    row.All(group => group.CircleCount == 3);
+
+                if (!isTwoCirclePattern &&
+                    !isThreeCirclePattern)
+                {
+                    continue;
+                }
+
+                double widthThreshold =
+                    isThreeCirclePattern
+                        ? 140.0
+                        : 120.0;
+
+                List<BoltHoleCircleGroup> orderedByCenterDistance = row
+                    .OrderBy(group =>
+                        Math.Abs(group.CenterX - panelCenterX))
                     .ToList();
 
-                // 두 경우 모두 최종적으로 삭제할 대상은 2쌍이다.
-                // 120 이하는 바깥쪽 2쌍 삭제,
-                // 120 초과는 안쪽 2쌍 삭제.
-                List<BoltHoleCirclePair> pairsToDelete =
-                    targetWidth <= 120.0
+                List<BoltHoleCircleGroup> groupsToDelete =
+                    targetWidth <= widthThreshold
                         ? orderedByCenterDistance
                             .Skip(2)
                             .Take(2)
@@ -1553,91 +1578,86 @@ internal static class Program
                             .Take(2)
                             .ToList();
 
-                foreach (BoltHoleCirclePair pair in pairsToDelete)
+                foreach (BoltHoleCircleGroup group in groupsToDelete)
                 {
-                    RemoveEntityFromDrawing(
-                        drawingData,
-                        pair.OuterCircle
-                    );
+                    foreach (EntityData circleData in group.Circles)
+                    {
+                        RemoveEntityFromDrawing(
+                            drawingData,
+                            circleData
+                        );
 
-                    RemoveEntityFromDrawing(
-                        drawingData,
-                        pair.InnerCircle
-                    );
-
-                    panel.Entities.RemoveAll(entity =>
-                        string.Equals(
-                            entity.Handle,
-                            pair.OuterCircle.Handle,
-                            StringComparison.OrdinalIgnoreCase
-                        ) ||
-                        string.Equals(
-                            entity.Handle,
-                            pair.InnerCircle.Handle,
-                            StringComparison.OrdinalIgnoreCase
-                        )
-                    );
+                        panel.Entities.RemoveAll(entity =>
+                            string.Equals(
+                                entity.Handle,
+                                circleData.Handle,
+                                StringComparison.OrdinalIgnoreCase
+                            )
+                        );
+                    }
                 }
             }
         }
     }
 
-    private static List<BoltHoleCirclePair> BuildBoltHoleCirclePairs(
+    private static List<BoltHoleCircleGroup> BuildBoltHoleCenterGroups(
         IReadOnlyList<EntityData> circles,
         double centerTolerance
     )
     {
-        List<BoltHoleCirclePair> result = new();
+        List<BoltHoleCircleGroup> result = new();
         HashSet<string> usedHandles = new(
             StringComparer.OrdinalIgnoreCase
         );
 
-        foreach (EntityData first in circles)
+        foreach (EntityData seed in circles)
         {
-            if (usedHandles.Contains(first.Handle))
+            if (usedHandles.Contains(seed.Handle))
             {
                 continue;
             }
 
-            EntityData? second = circles
+            List<EntityData> sameCenter = circles
                 .Where(candidate =>
-                    !ReferenceEquals(candidate, first) &&
                     !usedHandles.Contains(candidate.Handle))
                 .Where(candidate =>
-                    Math.Abs(candidate.CenterX - first.CenterX)
+                    Math.Abs(candidate.CenterX - seed.CenterX)
                         <= centerTolerance &&
-                    Math.Abs(candidate.CenterY - first.CenterY)
+                    Math.Abs(candidate.CenterY - seed.CenterY)
                         <= centerTolerance)
-                .Where(candidate =>
-                    Math.Abs(candidate.Radius - first.Radius)
-                        > 0.000001)
-                .OrderBy(candidate =>
-                    Math.Abs(candidate.Radius - first.Radius))
-                .FirstOrDefault();
+                .OrderByDescending(candidate => candidate.Radius)
+                .ToList();
 
-            if (second == null)
+            List<EntityData> distinctRadiusCircles = new();
+
+            foreach (EntityData candidate in sameCenter)
+            {
+                bool duplicateRadius =
+                    distinctRadiusCircles.Any(existing =>
+                        Math.Abs(existing.Radius - candidate.Radius)
+                            <= 0.000001
+                    );
+
+                if (!duplicateRadius)
+                {
+                    distinctRadiusCircles.Add(candidate);
+                }
+            }
+
+            if (distinctRadiusCircles.Count < 2)
             {
                 continue;
             }
 
-            EntityData outer =
-                first.Radius >= second.Radius
-                    ? first
-                    : second;
-
-            EntityData inner =
-                first.Radius < second.Radius
-                    ? first
-                    : second;
-
-            result.Add(new BoltHoleCirclePair
+            foreach (EntityData item in sameCenter)
             {
-                OuterCircle = outer,
-                InnerCircle = inner
-            });
+                usedHandles.Add(item.Handle);
+            }
 
-            usedHandles.Add(first.Handle);
-            usedHandles.Add(second.Handle);
+            result.Add(new BoltHoleCircleGroup
+            {
+                Circles = distinctRadiusCircles
+            });
         }
 
         return result;
@@ -1804,13 +1824,22 @@ internal static class Program
             );
         }
 
-        // 이전 정상 코드와 같은 방식:
-        // 꼭짓점 16개 패널 자체의 구멍을 기준으로 하지 않는다.
-        // 왼쪽에 있는 가장 가까운 '모서리 구멍 패널'의 최종 반지름과,
-        // 바로 앞 '내부 흰색 사각형'의 최종 크기를 기준으로 외곽을 재생성한다.
+        // 원이 없고 사각형이 정확히 2개인 패널이 있으면,
+        // 두 사각형의 가로/세로 크기 차이를 재생성 여유값으로 사용한다.
+        // 재생성 크기 = 목표값 - 두 사각형 크기 차이 - 1.5
+        // 해당 패널이 없으면 재생성 크기 = 목표값 - 21
+        (double vertex16TargetWidth, double vertex16TargetHeight) =
+            GetVertex16TargetSize(
+                panelGroups,
+                input.TargetWidth,
+                input.TargetHeight
+            );
+
         RebuildVertex16PanelsFromPreviousPanels(
             drawingData,
-            panelGroups
+            panelGroups,
+            vertex16TargetWidth,
+            vertex16TargetHeight
         );
     }
 
@@ -1950,14 +1979,144 @@ internal static class Program
         }
     }
 
+    /// <summary>
+    /// 16꼭짓점 패널의 재생성 목표 크기를 계산한다.
+    ///
+    /// 조건에 맞는 기준 패널:
+    /// - 원(CIRCLE)이 하나도 없음
+    /// - 치수와 텍스트 개수는 무관
+    /// - 닫힌 4꼭짓점 사각형이 정확히 2개
+    ///
+    /// 기준 패널이 있으면:
+    /// X = 목표 X - 두 사각형 가로 크기 차이 - 1.5
+    /// Y = 목표 Y - 두 사각형 세로 크기 차이 - 1.5
+    ///
+    /// 기준 패널이 없으면:
+    /// X = 목표 X - 21
+    /// Y = 목표 Y - 21
+    /// </summary>
+    private static (double Width, double Height) GetVertex16TargetSize(
+        IReadOnlyList<PanelGroup> panelGroups,
+        double targetWidth,
+        double targetHeight
+    )
+    {
+        foreach (PanelGroup panel in panelGroups
+            .Where(panel => !panel.IsThicknessPanel))
+        {
+            bool hasCircle = panel.Entities
+                .Any(entity => entity.Entity is Circle);
+
+            if (hasCircle)
+            {
+                continue;
+            }
+
+            List<EntityData> rectangles = panel.Entities
+                .Where(IsClosedFourVertexRectangle)
+                .GroupBy(entity => entity.Handle)
+                .Select(group => group.First())
+                .ToList();
+
+            if (rectangles.Count != 2)
+            {
+                continue;
+            }
+
+            DimensionBounds firstBounds =
+                GetCurrentBounds(rectangles[0].Entity);
+
+            DimensionBounds secondBounds =
+                GetCurrentBounds(rectangles[1].Entity);
+
+            double firstWidth =
+                firstBounds.MaxX - firstBounds.MinX;
+
+            double firstHeight =
+                firstBounds.MaxY - firstBounds.MinY;
+
+            double secondWidth =
+                secondBounds.MaxX - secondBounds.MinX;
+
+            double secondHeight =
+                secondBounds.MaxY - secondBounds.MinY;
+
+            double widthDifference =
+                Math.Abs(firstWidth - secondWidth);
+
+            double heightDifference =
+                Math.Abs(firstHeight - secondHeight);
+
+            double calculatedWidth =
+                targetWidth - widthDifference - 8.7;
+
+            double calculatedHeight =
+                targetHeight - heightDifference - 8.7;
+
+            if (calculatedWidth <= 0.0 ||
+                calculatedHeight <= 0.0)
+            {
+                throw new Exception(
+                    "16꼭짓점 패널 기준 크기 계산 결과가 0 이하입니다. " +
+                    $"Panel={panel.BasePolyline.Handle}, " +
+                    $"Target={targetWidth}x{targetHeight}, " +
+                    $"RectangleDifference={widthDifference}x{heightDifference}, " +
+                    $"Calculated={calculatedWidth}x{calculatedHeight}"
+                );
+            }
+
+            return (
+                calculatedWidth,
+                calculatedHeight
+            );
+        }
+
+        double fallbackWidth = targetWidth - 44.7;
+        double fallbackHeight = targetHeight - 44.7;
+
+        if (fallbackWidth <= 0.0 ||
+            fallbackHeight <= 0.0)
+        {
+            throw new Exception(
+                "16꼭짓점 패널 기본 기준 크기 계산 결과가 0 이하입니다. " +
+                $"Target={targetWidth}x{targetHeight}, " +
+                $"Calculated={fallbackWidth}x{fallbackHeight}"
+            );
+        }
+
+        return (
+            fallbackWidth,
+            fallbackHeight
+        );
+    }
+
+    private static bool IsClosedFourVertexRectangle(
+        EntityData entity
+    )
+    {
+        return entity.Entity switch
+        {
+            LwPolyline polyline =>
+                polyline.IsClosed &&
+                polyline.Vertices.Count == 4,
+
+            Polyline2D polyline =>
+                polyline.IsClosed &&
+                polyline.Vertices.Count == 4,
+
+            _ => false
+        };
+    }
+
     private static void RebuildVertex16PanelsFromPreviousPanels(
         DrawingData drawingData,
-        IReadOnlyList<PanelGroup> panelGroups
+        IReadOnlyList<PanelGroup> panelGroups,
+        double targetWidth,
+        double targetHeight
     )
     {
         List<PanelGroup> normalPanels = panelGroups
             .Where(panel => !panel.IsThicknessPanel)
-            .OrderBy(panel => GetCurrentBounds(panel.BasePolyline.Entity).MinX)
             .ToList();
 
         List<PanelGroup> specialPanels = normalPanels
@@ -1967,75 +2126,39 @@ internal static class Program
                 polyline.Vertices.Count == 16)
             .ToList();
 
+        if (specialPanels.Count == 0)
+        {
+            return;
+        }
+
+        // 어느 패널이든 치구 레이어 모서리 구멍이 있으면 반지름 기준으로 사용할 수 있다.
+        // 발견된 모서리 구멍 중 가장 큰 현재 반지름을 사용한다.
+        Circle? radiusSource = normalPanels
+            .SelectMany(panel =>
+            {
+                HashSet<string> handles =
+                    FindResizableCornerHoleHandles(panel);
+
+                return panel.Entities
+                    .Where(entity => handles.Contains(entity.Handle))
+                    .Select(entity => entity.Entity)
+                    .OfType<Circle>();
+            })
+            .OrderByDescending(circle => circle.Radius)
+            .FirstOrDefault();
+
+        if (radiusSource == null)
+        {
+            return;
+        }
+
         foreach (PanelGroup specialPanel in specialPanels)
         {
-            DimensionBounds specialBounds =
-                GetCurrentBounds(specialPanel.BasePolyline.Entity);
-
-            double specialCenterX =
-                (specialBounds.MinX + specialBounds.MaxX) / 2.0;
-
-            List<PanelGroup> panelsOnLeft = normalPanels
-                .Where(panel => !ReferenceEquals(panel, specialPanel))
-                .Where(panel =>
-                {
-                    DimensionBounds bounds =
-                        GetCurrentBounds(panel.BasePolyline.Entity);
-
-                    double centerX =
-                        (bounds.MinX + bounds.MaxX) / 2.0;
-
-                    return centerX < specialCenterX;
-                })
-                .OrderByDescending(panel =>
-                    GetCurrentBounds(panel.BasePolyline.Entity).MaxX)
-                .ToList();
-
-            // 이전 코드의 secondPanelCircles 역할:
-            // 왼쪽 패널 중 모서리 치구 원을 가진 가장 가까운 패널을 찾는다.
-            PanelGroup? holeSourcePanel = panelsOnLeft
-                .FirstOrDefault(panel =>
-                    FindResizableCornerHoleHandles(panel).Count >= 2);
-
-            if (holeSourcePanel == null)
-            {
-                continue;
-            }
-
-            HashSet<string> holeHandles =
-                FindResizableCornerHoleHandles(holeSourcePanel);
-
-            Circle? radiusSource = holeSourcePanel.Entities
-                .Where(entity => holeHandles.Contains(entity.Handle))
-                .Select(entity => entity.Entity)
-                .OfType<Circle>()
-                .OrderByDescending(circle => circle.Radius)
-                .FirstOrDefault();
-
-            if (radiusSource == null)
-            {
-                continue;
-            }
-
-            // 이전 코드의 thirdInnerBox 역할:
-            // 특수 패널 바로 왼쪽에서 내부 흰색 사각형을 가진 가장 가까운 패널을 찾는다.
-            EntityData? innerRectangle = panelsOnLeft
-                .SelectMany(panel => panel.Entities
-                    .Where(entity => IsInnerWhiteRectangle(panel, entity))
-                    .Select(entity => new
-                    {
-                        Panel = panel,
-                        Entity = entity,
-                        Right = GetCurrentBounds(panel.BasePolyline.Entity).MaxX
-                    }))
-                .OrderByDescending(item => item.Right)
-                .Select(item => item.Entity)
-                .FirstOrDefault();
-
             RebuildVertex16PanelLikeOldFourthPanel(
                 drawingData,
                 specialPanel,
-                innerRectangle,
+                targetWidth,
+                targetHeight,
                 radiusSource.Radius
             );
         }
@@ -2044,7 +2167,8 @@ internal static class Program
     private static void RebuildVertex16PanelLikeOldFourthPanel(
         DrawingData drawingData,
         PanelGroup panel,
-        EntityData? resizedInnerRectangle,
+        double targetWidth,
+        double targetHeight,
         double holeRadius
     )
     {
@@ -2071,30 +2195,15 @@ internal static class Program
         DimensionBounds oldPanelBounds =
             GetCurrentBounds(oldPolyline);
 
-        double targetWidth;
-        double targetHeight;
-
-        if (resizedInnerRectangle != null)
+        // 16꼭짓점 패널의 재생성 외곽은 다른 패널을 참조하지 않는다.
+        // GetVertex16TargetSize에서 계산한 목표 X/Y를 그대로 사용한다.
+        if (targetWidth <= 0.0 || targetHeight <= 0.0)
         {
-            DimensionBounds innerBounds =
-                GetCurrentBounds(resizedInnerRectangle.Entity);
-
-            // 이전 정상 코드와 동일하게 내부 사각형보다 사방 4,
-            // 전체 가로/세로는 각각 8 작게 만든다.
-            targetWidth =
-                (innerBounds.MaxX - innerBounds.MinX) - 8.0;
-
-            targetHeight =
-                (innerBounds.MaxY - innerBounds.MinY) - 8.0;
-        }
-        else
-        {
-            // 내부 사각형을 찾지 못한 도면은 현재 특수 패널 크기를 유지한다.
-            targetWidth =
-                oldPanelBounds.MaxX - oldPanelBounds.MinX;
-
-            targetHeight =
-                oldPanelBounds.MaxY - oldPanelBounds.MinY;
+            throw new Exception(
+                $"16꼭짓점 패널의 목표 크기가 잘못되었습니다. " +
+                $"Panel={oldPanelData.Handle}, " +
+                $"Target={targetWidth}x{targetHeight}"
+            );
         }
 
         if (targetWidth <= cornerLength * 2.0 ||
@@ -2706,6 +2815,195 @@ internal static class Program
     /// 조립 묶음 전체 외곽의 오른쪽 끝과 다음 조립 묶음 전체 외곽의 왼쪽 끝 사이가
     /// 정확히 gap이 되도록 X축 방향으로 정렬한다.
     /// </summary>
+    private sealed class HoleCircleGroup
+    {
+        public required string RepresentativeHandle { get; init; }
+        public required double CenterX { get; init; }
+        public required double CenterY { get; init; }
+        public required double Radius { get; init; }
+    }
+
+    private sealed class HoleClearanceWarning
+    {
+        public required int PanelNumber { get; init; }
+        public required string BoltHandle { get; init; }
+        public required string HoleHandle { get; init; }
+        public required double Clearance { get; init; }
+        public required double CenterDistance { get; init; }
+        public required double BoltRadius { get; init; }
+        public required double HoleRadius { get; init; }
+    }
+
+    private static void ShowBoltHoleClearanceWarnings(
+        IReadOnlyList<PanelGroup> panelGroups,
+        double maximumClearance,
+        double centerTolerance = 0.001
+    )
+    {
+        List<HoleClearanceWarning> warnings = new();
+
+        foreach (PanelGroup panel in panelGroups)
+        {
+            List<EntityData> circles = panel.Entities
+                .Where(entity => entity.Entity is Circle)
+                .GroupBy(entity => entity.Handle)
+                .Select(group => group.First())
+                .ToList();
+
+            List<HoleCircleGroup> boltHoles = BuildHoleCircleGroups(
+                circles.Where(entity =>
+                    string.Equals(
+                        entity.LayerName,
+                        "볼트 구멍",
+                        StringComparison.OrdinalIgnoreCase
+                    )),
+                centerTolerance
+            );
+
+            List<HoleCircleGroup> normalHoles = BuildHoleCircleGroups(
+                circles.Where(entity =>
+                    !string.Equals(
+                        entity.LayerName,
+                        "볼트 구멍",
+                        StringComparison.OrdinalIgnoreCase
+                    )),
+                centerTolerance
+            );
+
+            foreach (HoleCircleGroup boltHole in boltHoles)
+            {
+                foreach (HoleCircleGroup normalHole in normalHoles)
+                {
+                    double dx = boltHole.CenterX - normalHole.CenterX;
+                    double dy = boltHole.CenterY - normalHole.CenterY;
+                    double centerDistance = Math.Sqrt(dx * dx + dy * dy);
+                    double clearance =
+                        centerDistance - boltHole.Radius - normalHole.Radius;
+
+                    if (clearance > maximumClearance)
+                    {
+                        continue;
+                    }
+
+                    warnings.Add(new HoleClearanceWarning
+                    {
+                        PanelNumber = panel.Number,
+                        BoltHandle = boltHole.RepresentativeHandle,
+                        HoleHandle = normalHole.RepresentativeHandle,
+                        Clearance = clearance,
+                        CenterDistance = centerDistance,
+                        BoltRadius = boltHole.Radius,
+                        HoleRadius = normalHole.Radius
+                    });
+                }
+            }
+        }
+
+        if (warnings.Count == 0)
+        {
+            return;
+        }
+
+        List<HoleClearanceWarning> ordered = warnings
+            .OrderBy(item => item.Clearance)
+            .ThenBy(item => item.PanelNumber)
+            .ToList();
+
+        const int maxDisplay = 30;
+        List<string> lines = new()
+        {
+            $"볼트 구멍과 일반 구멍 사이 간격이 {maximumClearance:0.###} 이하인 위치가 {ordered.Count}개 발견되었습니다.",
+            "",
+            "간격 = 중심거리 - 볼트 구멍 반지름 - 일반 구멍 반지름",
+            ""
+        };
+
+        foreach (HoleClearanceWarning warning in ordered.Take(maxDisplay))
+        {
+            lines.Add(
+                $"패널 {warning.PanelNumber} | " +
+                $"볼트={warning.BoltHandle} | " +
+                $"구멍={warning.HoleHandle} | " +
+                $"간격={warning.Clearance:0.###} | " +
+                $"중심거리={warning.CenterDistance:0.###} | " +
+                $"R={warning.BoltRadius:0.###}+{warning.HoleRadius:0.###}"
+            );
+        }
+
+        if (ordered.Count > maxDisplay)
+        {
+            lines.Add("");
+            lines.Add($"나머지 {ordered.Count - maxDisplay}개는 생략되었습니다.");
+        }
+
+        lines.Add("");
+        lines.Add("경고가 있어도 수정된 DWG는 그대로 저장됩니다.");
+
+        MessageBox.Show(
+            string.Join(Environment.NewLine, lines),
+            "구멍 간격 경고",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Warning
+        );
+    }
+
+    private static List<HoleCircleGroup> BuildHoleCircleGroups(
+        IEnumerable<EntityData> circleEntities,
+        double centerTolerance
+    )
+    {
+        List<EntityData> circles = circleEntities
+            .Where(entity => entity.Entity is Circle)
+            .GroupBy(entity => entity.Handle)
+            .Select(group => group.First())
+            .ToList();
+
+        List<HoleCircleGroup> result = new();
+        HashSet<string> used = new(StringComparer.OrdinalIgnoreCase);
+
+        foreach (EntityData seed in circles)
+        {
+            if (used.Contains(seed.Handle))
+            {
+                continue;
+            }
+
+            Circle seedCircle = (Circle)seed.Entity;
+
+            List<EntityData> sameCenter = circles
+                .Where(candidate => !used.Contains(candidate.Handle))
+                .Where(candidate =>
+                {
+                    Circle circle = (Circle)candidate.Entity;
+                    return
+                        Math.Abs(circle.Center.X - seedCircle.Center.X) <= centerTolerance &&
+                        Math.Abs(circle.Center.Y - seedCircle.Center.Y) <= centerTolerance;
+                })
+                .ToList();
+
+            foreach (EntityData item in sameCenter)
+            {
+                used.Add(item.Handle);
+            }
+
+            EntityData outermost = sameCenter
+                .OrderByDescending(item => ((Circle)item.Entity).Radius)
+                .First();
+
+            Circle outerCircle = (Circle)outermost.Entity;
+
+            result.Add(new HoleCircleGroup
+            {
+                RepresentativeHandle = outermost.Handle,
+                CenterX = outerCircle.Center.X,
+                CenterY = outerCircle.Center.Y,
+                Radius = outerCircle.Radius
+            });
+        }
+
+        return result;
+    }
+
     private static void ArrangePanelGroupsWithGap(
         IReadOnlyList<PanelGroup> panelGroups,
         double gap
@@ -3628,7 +3926,7 @@ internal static class Program
             width <= 100.0 &&
             height <= 100.0
                 ? 1.5
-                : 4.0;
+                : 2.0;
 
         return ratio >= minimumAspectRatio &&
                ratio < 10.0;
