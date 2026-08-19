@@ -1,8 +1,8 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
-using System.Globalization;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using ACadSharp;
@@ -13,22 +13,19 @@ using CSMath;
 namespace DwgAutoResize;
 
 /// <summary>
-/// DWG 자동 수정 프로그램 버전 2의 초기 기반 코드.
+/// DWG 자동 수정 프로그램 버전 2.
 ///
 /// 현재 포함된 기능:
 /// 1. DWG 파일 선택 UI
 /// 2. DWG 파일 읽기
-/// 3. 모든 Model Space 객체의 종류, 레이어, Handle, 좌표 및 크기 수집
-/// 4. 객체 정보 TXT 보고서 저장
-/// 5. DWG 저장 전 기본 객체 검증
-/// 6. 수정된 문서를 새 DWG로 저장하는 공통 함수
-///
-/// 패널 탐색, 크기 변경, 볼트 구멍 처리, 치수 처리 및 재배치는
-/// 버전 2 규칙에 맞춰 이후 새로 추가한다.
+/// 3. 일반/두께/중첩 16꼭짓점 패널 분류
+/// 4. 입력한 X/Y/두께에 맞춘 패널 및 치수 수정
+/// 5. 볼트 구멍 삭제 확인과 구멍 간격 경고
+/// 6. 중첩 관계를 유지한 50 간격 재배치
+/// 7. 객체 검증 후 새 DWG 저장
 /// </summary>
-internal static class Program
+internal static class Program_V2
 {
-
     [STAThread]
     private static void Main()
     {
@@ -41,7 +38,9 @@ internal static class Program
                 return;
             }
 
+
             CadDocument document = DwgReader.Read(dwgPath);
+
             DrawingData drawingData = ReadDrawingData(document);
 
             string directory =
@@ -50,18 +49,6 @@ internal static class Program
 
             string fileName =
                 Path.GetFileNameWithoutExtension(dwgPath);
-            
-            //도형 위치 출력 txt 파일
-            // string reportPath = Path.Combine(
-            //     directory,
-            //     $"{fileName}_objects_v2.txt"
-            // );
-
-            // SaveEntityReport(
-            //     drawingData,
-            //     reportPath
-            // );
-
             // 패널 기준 객체:
             // Layer="치구", POLYLINE 계열, 실제 표시 색상=흰색(ACI 7)
             // 기준 폴리선의 외곽을 사방 30만큼 확장한 범위에
@@ -78,16 +65,16 @@ internal static class Program
                 panelGroups
             );
 
-            //패널안의 객체 출력 txt 파일
-            // string panelReportPath = Path.Combine(
-            //     directory,
-            //     $"{fileName}_panels_v2.txt"
-            // );
-
-            // SavePanelGroupReport(
-            //     panelGroups,
-            //     panelReportPath
-            // );
+            // 크기 수정 전에 원래 중첩 관계를 기억한다.
+            // 이후 16꼭짓점 형상이 재생성되어 외곽 크기가 달라져도
+            // 처음 들어 있던 사각형 패널과 함께 이동한다.
+            Dictionary<PanelGroup, List<PanelGroup>>
+                originalNestedVertex16Bindings =
+                    BindNestedVertex16Panels(
+                        panelGroups
+                            .Where(panel => !panel.IsThicknessPanel)
+                            .ToList()
+                    );
 
             // 수정 UI에 표시할 현재값은 폴리선 크기가 아니라 DWG 치수값으로 읽는다.
             // X/Y는 일반 패널 중 면적이 가장 큰 사각형 패널의 가로/세로 치수,
@@ -104,6 +91,7 @@ internal static class Program
                 return;
             }
 
+
             // 목표 높이(두께)가 36 이하이면 두께 패널 묶음을 통째로 삭제한다.
             // 기준 외곽뿐 아니라 빨간 박스, 치수 및 패널에 묶인 모든 객체를 제거하고
             // 이후 크기 수정과 50 간격 재배치 대상에서도 제외한다.
@@ -115,6 +103,7 @@ internal static class Program
             bool thicknessPanelsRemoved =
                 effectiveTargetThickness <= 36.0;
 
+
             if (thicknessPanelsRemoved)
             {
                 RemoveThicknessPanelGroups(
@@ -122,10 +111,9 @@ internal static class Program
                     panelGroups
                 );
             }
-
             // 한 패널 안에서 같은 Y축에 볼트 구멍 원 4쌍이 있으면
-            // 목표 가로 120 이하: 중심에 가까운 2쌍 유지
-            // 목표 가로 120 초과: 중심에 가까운 2쌍 삭제(바깥쪽 2쌍 유지)
+            // 기존 크기 규칙으로 삭제 후보를 찾은 뒤 사용자에게 삭제 여부를 묻는다.
+            // '예'를 선택한 경우에만 삭제하고 '아니요'이면 모두 그대로 유지한다.
             SelectBoltHolePairsByTargetWidth(
                 drawingData,
                 panelGroups,
@@ -143,7 +131,8 @@ internal static class Program
             // 왼쪽부터 패널 사이 간격을 정확히 50으로 재배치한다.
             ArrangePanelGroupsWithGap(
                 panelGroups,
-                50.0
+                50.0,
+                originalNestedVertex16Bindings
             );
 
             ShowBoltHoleClearanceWarnings(
@@ -417,175 +406,6 @@ internal static class Program
         }
     }
 
-    /// <summary>
-    /// 현재 수집된 모든 객체 정보를 TXT 파일로 출력한다.
-    /// 이후 객체 탐색 규칙을 만들 때 이 파일의 Handle, 레이어, 좌표 및 크기를 사용한다.
-    /// </summary>
-    private static void SaveEntityReport(
-        DrawingData drawingData,
-        string outputPath
-    )
-    {
-        using StreamWriter writer = new(
-            outputPath,
-            false
-        );
-
-        writer.WriteLine($"DWG 버전: {drawingData.Version}");
-        writer.WriteLine($"레이어 수: {drawingData.LayerCount}");
-        writer.WriteLine($"블록 수: {drawingData.BlockCount}");
-        writer.WriteLine($"Model Space 객체 수: {drawingData.EntityCount}");
-        writer.WriteLine();
-
-        for (int index = 0;
-             index < drawingData.Entities.Count;
-             index++)
-        {
-            EntityData entity = drawingData.Entities[index];
-
-            writer.WriteLine(
-                $"[{index}] 종류={entity.ObjectName}, " +
-                $"Handle={entity.Handle}, " +
-                $"Layer={entity.LayerName}, " +
-                $"ColorIndex={entity.ColorIndex}"
-            );
-
-            WriteEntityCoordinates(
-                writer,
-                entity
-            );
-
-            if (entity.HasBoundingBox)
-            {
-                writer.WriteLine(
-                    "  Bounds=" +
-                    $"Min({entity.MinX:F6}, {entity.MinY:F6}, {entity.MinZ:F6}), " +
-                    $"Max({entity.MaxX:F6}, {entity.MaxY:F6}, {entity.MaxZ:F6})"
-                );
-
-                writer.WriteLine(
-                    "  Size=" +
-                    $"Width={entity.Width:F6}, " +
-                    $"Height={entity.Height:F6}, " +
-                    $"Depth={entity.Depth:F6}, " +
-                    "Center=" +
-                    $"({entity.CenterBoxX:F6}, {entity.CenterBoxY:F6}, {entity.CenterBoxZ:F6})"
-                );
-            }
-            else
-            {
-                writer.WriteLine("  Bounds=지원하지 않음");
-            }
-
-            writer.WriteLine();
-        }
-    }
-
-    /// <summary>
-    /// 객체 종류별 핵심 좌표를 보고서에 기록한다.
-    /// </summary>
-    private static void WriteEntityCoordinates(
-        StreamWriter writer,
-        EntityData entity
-    )
-    {
-        switch (entity.ObjectName)
-        {
-            case "LINE":
-                writer.WriteLine(
-                    "  Start=" +
-                    $"({entity.StartX:F6}, {entity.StartY:F6}, {entity.StartZ:F6})"
-                );
-                writer.WriteLine(
-                    "  End=" +
-                    $"({entity.EndX:F6}, {entity.EndY:F6}, {entity.EndZ:F6})"
-                );
-                break;
-
-            case "ARC":
-                writer.WriteLine(
-                    "  Center=" +
-                    $"({entity.CenterX:F6}, {entity.CenterY:F6}, {entity.CenterZ:F6})"
-                );
-                writer.WriteLine(
-                    $"  Radius={entity.Radius:F6}, " +
-                    $"Diameter={entity.Diameter:F6}, " +
-                    $"StartAngle={entity.StartAngle:F6}, " +
-                    $"EndAngle={entity.EndAngle:F6}"
-                );
-                break;
-
-            case "CIRCLE":
-                writer.WriteLine(
-                    "  Center=" +
-                    $"({entity.CenterX:F6}, {entity.CenterY:F6}, {entity.CenterZ:F6})"
-                );
-                writer.WriteLine(
-                    $"  Radius={entity.Radius:F6}, " +
-                    $"Diameter={entity.Diameter:F6}"
-                );
-                break;
-
-            case "LWPOLYLINE":
-            case "POLYLINE2D":
-                writer.WriteLine(
-                    $"  Closed={entity.IsClosed}, " +
-                    $"VertexCount={entity.Vertices.Count}"
-                );
-
-                for (int i = 0;
-                     i < entity.Vertices.Count;
-                     i++)
-                {
-                    PointData point = entity.Vertices[i];
-
-                    writer.WriteLine(
-                        $"  Vertex[{i}]=" +
-                        $"({point.X:F6}, {point.Y:F6}, {point.Z:F6}), " +
-                        $"Bulge={point.Bulge:F12}"
-                    );
-                }
-                break;
-
-            case "TEXT":
-            case "MTEXT":
-                writer.WriteLine(
-                    "  Insert=" +
-                    $"({entity.InsertX:F6}, {entity.InsertY:F6}, {entity.InsertZ:F6})"
-                );
-                writer.WriteLine($"  Text=\"{entity.TextValue}\"");
-                break;
-
-            case "INSERT":
-                writer.WriteLine($"  Block={entity.BlockName}");
-                writer.WriteLine(
-                    "  Insert=" +
-                    $"({entity.InsertX:F6}, {entity.InsertY:F6}, {entity.InsertZ:F6})"
-                );
-                break;
-
-            case "DIMENSION":
-                writer.WriteLine($"  Text=\"{entity.TextValue}\"");
-                writer.WriteLine(
-                    "  FirstPoint=" +
-                    $"({entity.FirstPointX:F6}, {entity.FirstPointY:F6}, {entity.FirstPointZ:F6})"
-                );
-                writer.WriteLine(
-                    "  SecondPoint=" +
-                    $"({entity.SecondPointX:F6}, {entity.SecondPointY:F6}, {entity.SecondPointZ:F6})"
-                );
-                writer.WriteLine(
-                    "  DefinitionPoint=" +
-                    $"({entity.DefinitionPointX:F6}, {entity.DefinitionPointY:F6}, {entity.DefinitionPointZ:F6})"
-                );
-                writer.WriteLine(
-                    "  TextPosition=" +
-                    $"({entity.TextPositionX:F6}, {entity.TextPositionY:F6}, {entity.TextPositionZ:F6})"
-                );
-                break;
-        }
-    }
-
 
     /// <summary>
     /// 엔티티의 실제 표시 색상 ACI 번호를 구한다.
@@ -660,7 +480,8 @@ internal static class Program
     /// <summary>
     /// 흰색 치구 폴리선을 각각 패널 기준으로 지정한다.
     /// 기준 외곽에서 사방 searchMargin 이내에 걸치는 모든 객체를 묶는다.
-    /// 최종 포함 객체가 3개 이상인 경우에만 패널로 등록한다.
+    /// 일반 패널은 구성원이 2개 이상일 때 등록하고,
+    /// 16꼭짓점 패널은 외곽 하나만 있어도 독립 패널로 등록한다.
     /// </summary>
     private static List<PanelGroup> FindPanelGroups(
         DrawingData drawingData,
@@ -681,8 +502,11 @@ internal static class Program
 
         // 다른 흰색 치구 폴리선 안에 완전히 들어가는 일반 사각형은
         // 독립 일반 패널 기준이 아니라 내부 사각형으로 취급한다.
+        // 단, 닫힌 16꼭짓점 LWPOLYLINE은 사각형 안에 들어 있어도
+        // 별도의 독립 패널 기준으로 승격한다.
         List<EntityData> allPanelBases = allWhiteChiguPolylines
             .Where(candidate =>
+                IsVertex16PanelBase(candidate) ||
                 !allWhiteChiguPolylines.Any(other =>
                     !ReferenceEquals(candidate, other) &&
                     IsCompletelyInside(candidate, other, 0.001)
@@ -692,7 +516,7 @@ internal static class Program
 
         // 각 두께 패널 후보 자신의 수정 전 크기로 최소 비율을 결정한다.
         // 후보 자체가 100x100 이하이면 1.5 이상,
-        // 그 외에는 2.0 이상이며, 모든 경우 4.0 미만이어야 한다.
+        // 그 외에는 2.0 이상이며, 모든 경우 10.0 미만이어야 한다.
         List<EntityData> thicknessPanelBases = allWhiteChiguPolylines
             .Where(IsThicknessPanelBase)
             .OrderBy(x => x.MinX)
@@ -706,7 +530,9 @@ internal static class Program
 
         List<EntityData> normalPanelBases = allPanelBases
             .Where(x => !thicknessBaseHandles.Contains(x.Handle))
-            .OrderBy(x => x.MinX)
+            // 중첩된 16꼭짓점 패널이 내부 객체를 먼저 소유하도록 먼저 처리한다.
+            .OrderByDescending(IsVertex16PanelBase)
+            .ThenBy(x => x.MinX)
             .ThenByDescending(x => x.MaxY)
             .ToList();
 
@@ -730,6 +556,9 @@ internal static class Program
             bool isThicknessPanel
         )
         {
+            bool isVertex16Panel =
+                IsVertex16PanelBase(panelBase);
+
             // 같은 기준 객체를 중복 등록하는 것만 막는다.
             // 다른 패널이 먼저 주변 객체를 잡았더라도 기준 폴리선 자체는 계속 검사한다.
             if (result.Any(panel =>
@@ -749,9 +578,12 @@ internal static class Program
             List<EntityData> members = drawingData.Entities
                 // 기준 폴리선은 assignedHandles 상태와 관계없이 항상 포함한다.
                 // 다른 패널 기준 객체 역시 선점 대상에서 제외해 패널 개수 제한이 생기지 않게 한다.
+                // 단, 독립 16꼭짓점 패널 기준은 먼저 처리된 뒤 바깥 사각형
+                // 패널의 구성원으로 다시 들어가지 않게 한다.
                 .Where(x =>
                     ReferenceEquals(x, panelBase) ||
-                    panelBaseHandles.Contains(x.Handle) ||
+                    (panelBaseHandles.Contains(x.Handle) &&
+                     !IsVertex16PanelBase(x)) ||
                     !assignedHandles.Contains(x.Handle))
                 .Where(x => IsEntityInsideOrTouchingBounds(
                     x,
@@ -760,6 +592,14 @@ internal static class Program
                     searchMaxX,
                     searchMaxY
                 ))
+                // 16꼭짓점 독립 패널은 사방 30 검색 범위 전체를 사용하지 않고,
+                // 자신의 외곽 안에 완전히 들어가는 객체만 소유한다.
+                // 따라서 자신을 둘러싼 안쪽/바깥쪽 사각형은 포함하지 않는다.
+                .Where(x =>
+                    !isVertex16Panel ||
+                    ReferenceEquals(x, panelBase) ||
+                    IsCompletelyInside(x, panelBase, 0.001)
+                )
                 // 기준 폴리선 자신은 포함한다.
                 // 다른 흰색 치구 폴리선은 기준 패널 안에 완전히 들어간
                 // 내부 사각형일 때만 포함한다.
@@ -772,8 +612,12 @@ internal static class Program
                 .Select(group => group.First())
                 .ToList();
 
-            // 기준 폴리선을 포함해 객체가 3개 이상인 경우만 패널로 확정한다.
-            if (members.Count < 2)
+            // 16꼭짓점 외곽은 내부 객체가 없어도 그 자체로 독립 패널이다.
+            // 그 외 패널은 기존 조건대로 구성원이 2개 이상이어야 한다.
+            int minimumMemberCount =
+                isVertex16Panel ? 1 : 2;
+
+            if (members.Count < minimumMemberCount)
             {
                 return;
             }
@@ -923,6 +767,7 @@ internal static class Program
                 width > height
                     ? ThicknessPanelDirection.Horizontal
                     : ThicknessPanelDirection.Vertical;
+
         }
     }
 
@@ -941,8 +786,23 @@ internal static class Program
     }
 
     /// <summary>
+    /// 사각형 안에 중첩되어 있어도 독립 패널로 분리할 16꼭짓점 외곽인지 확인한다.
+    /// </summary>
+    private static bool IsVertex16PanelBase(
+        EntityData entity
+    )
+    {
+        return
+            IsWhiteChiguPolyline(entity) &&
+            entity.ObjectName == "LWPOLYLINE" &&
+            entity.IsClosed &&
+            entity.Vertices.Count == 16;
+    }
+
+    /// <summary>
     /// 객체의 바운딩박스가 패널 검색 범위와 조금이라도 겹치면 포함한다.
-    /// 따라서 기준 폴리선 내부 객체뿐 아니라 외곽에서 12 이내 객체도 포함된다.
+    /// 따라서 기준 폴리선 내부 객체뿐 아니라 호출 시 지정한 검색 여유 범위와
+    /// 겹치는 객체도 포함된다. 현재 패널 탐색에서는 사방 30을 사용한다.
     /// </summary>
     private static bool IsEntityInsideOrTouchingBounds(
         EntityData entity,
@@ -1000,64 +860,6 @@ internal static class Program
         };
     }
 
-
-
-    private static void SavePanelGroupReport(
-        IReadOnlyList<PanelGroup> panelGroups,
-        string outputPath
-    )
-    {
-        using StreamWriter writer = new(
-            outputPath,
-            false
-        );
-
-        writer.WriteLine($"찾은 패널 수: {panelGroups.Count}");
-        writer.WriteLine("기준: Layer=치구, POLYLINE, ColorIndex=7(흰색)");
-        writer.WriteLine("포함 범위: 기준 폴리선 바운딩박스 사방 25");
-        writer.WriteLine();
-
-        foreach (PanelGroup panel in panelGroups)
-        {
-            writer.WriteLine($"[패널 {panel.Number}]");
-            writer.WriteLine(
-                $"기준 Handle={panel.BasePolyline.Handle}, " +
-                $"Type={panel.BasePolyline.ObjectName}, " +
-                $"Layer={panel.BasePolyline.LayerName}, " +
-                $"ColorIndex={panel.BasePolyline.ColorIndex}"
-            );
-            writer.WriteLine(
-                "기준 Bounds=" +
-                $"({panel.BasePolyline.MinX:F6}, {panel.BasePolyline.MinY:F6}) ~ " +
-                $"({panel.BasePolyline.MaxX:F6}, {panel.BasePolyline.MaxY:F6})"
-            );
-            writer.WriteLine(
-                "검색 Bounds=" +
-                $"({panel.SearchMinX:F6}, {panel.SearchMinY:F6}) ~ " +
-                $"({panel.SearchMaxX:F6}, {panel.SearchMaxY:F6})"
-            );
-            writer.WriteLine($"묶인 객체 수={panel.Entities.Count}");
-            writer.WriteLine(
-                $"두께 패널={panel.IsThicknessPanel}, " +
-                $"방향={panel.ThicknessDirection}, " +
-                $"가로세로비={panel.AspectRatio:F3}"
-            );
-
-            foreach (EntityData entity in panel.Entities)
-            {
-                writer.WriteLine(
-                    $"  Handle={entity.Handle}, " +
-                    $"Type={entity.ObjectName}, " +
-                    $"Layer={entity.LayerName}, " +
-                    $"ColorIndex={entity.ColorIndex}"
-                );
-            }
-
-            writer.WriteLine();
-        }
-    }
-
-
     /// <summary>
     /// 일반 패널 중 면적이 가장 큰 닫힌 사각형 패널을 기준으로 X/Y 치수를 읽고,
     /// 두께 패널이 존재하면 그 패널의 짧은 방향 치수를 두께값으로 읽는다.
@@ -1081,6 +883,7 @@ internal static class Program
                 "가로·세로 현재값을 읽을 가장 큰 사각형 패널을 찾지 못했습니다."
             );
         }
+
 
         List<DimensionValueInfo> sourceDimensions =
             GetPanelDimensionValues(sourcePanel);
@@ -1108,6 +911,7 @@ internal static class Program
                 $"{sourcePanel.Number}번 기준 패널에서 세로 치수값을 찾지 못했습니다."
             );
         }
+
 
         double? thickness = null;
         PanelGroup? thicknessSourcePanel = null;
@@ -1471,8 +1275,9 @@ internal static class Program
     /// 한 패널의 같은 Y축 줄에 중심이 같은 볼트 구멍 그룹이 정확히 4개 있을 때 처리한다.
     /// 중심당 원이 2개인 2·2·2·2 형식은 목표 가로 120을 기준으로,
     /// 중심당 원이 3개인 3·3·3·3 형식은 목표 가로 140을 기준으로 처리한다.
-    /// 기준 이하이면 중심에 가까운 2그룹을 남기고 바깥 2그룹을 삭제하며,
-    /// 기준 초과이면 중심에 가까운 2그룹을 삭제한다.
+    /// 기준 이하이면 바깥 2그룹, 기준 초과이면 중심에 가까운 2그룹을
+    /// 삭제 후보로 모은다. 후보가 하나 이상이면 확인창을 한 번 표시하고,
+    /// 사용자가 '예'를 선택한 경우에만 실제 삭제한다.
     /// </summary>
     private static void SelectBoltHolePairsByTargetWidth(
         DrawingData drawingData,
@@ -1482,6 +1287,13 @@ internal static class Program
         double yTolerance = 0.001
     )
     {
+        List<(PanelGroup Panel, BoltHoleCircleGroup Group)>
+            deletionCandidates = new();
+
+        HashSet<string> candidateGroupKeys = new(
+            StringComparer.OrdinalIgnoreCase
+        );
+
         foreach (PanelGroup panel in panelGroups)
         {
             List<EntityData> boltCircles = panel.Entities
@@ -1578,26 +1390,98 @@ internal static class Program
                             .Take(2)
                             .ToList();
 
+
                 foreach (BoltHoleCircleGroup group in groupsToDelete)
                 {
-                    foreach (EntityData circleData in group.Circles)
-                    {
-                        RemoveEntityFromDrawing(
-                            drawingData,
-                            circleData
-                        );
+                    string groupKey = string.Join(
+                        "|",
+                        group.Circles
+                            .Select(circle => circle.Handle)
+                            .OrderBy(handle => handle,
+                                StringComparer.OrdinalIgnoreCase)
+                    );
 
-                        panel.Entities.RemoveAll(entity =>
-                            string.Equals(
-                                entity.Handle,
-                                circleData.Handle,
-                                StringComparison.OrdinalIgnoreCase
-                            )
-                        );
+                    if (candidateGroupKeys.Add(groupKey))
+                    {
+                        deletionCandidates.Add((panel, group));
                     }
                 }
             }
         }
+
+        if (deletionCandidates.Count == 0)
+        {
+            return;
+        }
+
+        int candidateCircleCount = deletionCandidates
+            .SelectMany(candidate => candidate.Group.Circles)
+            .Select(circle => circle.Handle)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+
+        string panelNumbers = string.Join(
+            ", ",
+            deletionCandidates
+                .Select(candidate => candidate.Panel.Number)
+                .Distinct()
+                .OrderBy(number => number)
+        );
+
+        DialogResult deleteResult = MessageBox.Show(
+            "일자로 배치된 볼트 구멍 중 기존 크기 규칙에 따른 " +
+            "삭제 후보가 발견되었습니다.\n\n" +
+            $"대상 패널: {panelNumbers}\n" +
+            $"삭제 후보: {deletionCandidates.Count}쌍 " +
+            $"(원 {candidateCircleCount}개)\n" +
+            $"목표 가로: {targetWidth:0.###}\n\n" +
+            "삭제하시겠습니까?\n\n" +
+            "예: 후보 볼트 구멍 삭제\n" +
+            "아니요: 삭제하지 않고 그대로 유지",
+            "볼트 구멍 삭제 확인",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2
+        );
+
+        if (deleteResult != DialogResult.Yes)
+        {
+            return;
+        }
+
+        HashSet<string> deletedCircleHandles = new(
+            StringComparer.OrdinalIgnoreCase
+        );
+
+        foreach (var candidate in deletionCandidates)
+        {
+            foreach (EntityData circleData in candidate.Group.Circles)
+            {
+                if (!deletedCircleHandles.Add(circleData.Handle))
+                {
+                    continue;
+                }
+
+                RemoveEntityFromDrawing(
+                    drawingData,
+                    circleData
+                );
+
+                // 혹시 같은 원이 다른 패널 구성원에도 들어 있으면
+                // 모든 패널 목록에서 함께 제거한다.
+                foreach (PanelGroup targetPanel in panelGroups)
+                {
+                    targetPanel.Entities.RemoveAll(entity =>
+                        string.Equals(
+                            entity.Handle,
+                            circleData.Handle,
+                            StringComparison.OrdinalIgnoreCase
+                        )
+                    );
+                }
+            }
+        }
+
     }
 
     private static List<BoltHoleCircleGroup> BuildBoltHoleCenterGroups(
@@ -1725,6 +1609,7 @@ internal static class Program
             .Select(data => data.Entity)
             .ToHashSet();
 
+
         foreach (Entity entity in entitiesToRemove)
         {
             if (drawingData.Document.Entities.Contains(entity))
@@ -1783,10 +1668,7 @@ internal static class Program
     {
         double widthDelta = input.TargetWidth - current.Width;
         double heightDelta = input.TargetHeight - current.Height;
-        double thicknessDelta =
-            input.TargetThickness.HasValue && current.Thickness.HasValue
-                ? input.TargetThickness.Value - current.Thickness.Value
-                : 0.0;
+
 
         HashSet<string> processedHandles = new();
 
@@ -1796,6 +1678,15 @@ internal static class Program
             double panelWidthDelta;
             double panelHeightDelta;
 
+            DimensionBounds currentPanelBounds =
+                GetCurrentBounds(panel.BasePolyline.Entity);
+
+            double currentPanelWidth =
+                currentPanelBounds.MaxX - currentPanelBounds.MinX;
+
+            double currentPanelHeight =
+                currentPanelBounds.MaxY - currentPanelBounds.MinY;
+
             if (!panel.IsThicknessPanel)
             {
                 panelWidthDelta = widthDelta;
@@ -1803,18 +1694,33 @@ internal static class Program
             }
             else if (panel.ThicknessDirection == ThicknessPanelDirection.Horizontal)
             {
-                panelWidthDelta = widthDelta;
-                panelHeightDelta = thicknessDelta;
+                // 상·하 두께 패널은 자신의 현재 크기를 기준으로
+                // 최종 가로=목표 X, 최종 세로=목표 두께가 되게 한다.
+                panelWidthDelta =
+                    input.TargetWidth - currentPanelWidth;
+
+                panelHeightDelta = input.TargetThickness.HasValue
+                    ? input.TargetThickness.Value - currentPanelHeight
+                    : 0.0;
             }
             else if (panel.ThicknessDirection == ThicknessPanelDirection.Vertical)
             {
-                panelWidthDelta = thicknessDelta;
-                panelHeightDelta = heightDelta;
+                // 좌·우 두께 패널은 공통 HeightDelta를 더하는 방식이 아니라
+                // 자신의 실제 현재 높이에서 목표 Y까지 직접 계산한다.
+                // 따라서 원본 좌우 패널 높이가 기준 패널과 달라도
+                // 최종 높이는 반드시 입력한 목표 Y와 같아진다.
+                panelWidthDelta = input.TargetThickness.HasValue
+                    ? input.TargetThickness.Value - currentPanelWidth
+                    : 0.0;
+
+                panelHeightDelta =
+                    input.TargetHeight - currentPanelHeight;
             }
             else
             {
                 continue;
             }
+
 
             ResizeSinglePanel(
                 panel,
@@ -1822,18 +1728,21 @@ internal static class Program
                 panelHeightDelta,
                 processedHandles
             );
+
         }
 
         // 원이 없고 사각형이 정확히 2개인 패널이 있으면,
         // 두 사각형의 가로/세로 크기 차이를 재생성 여유값으로 사용한다.
-        // 재생성 크기 = 목표값 - 두 사각형 크기 차이 - 1.5
-        // 해당 패널이 없으면 재생성 크기 = 목표값 - 21
+        // 재생성 크기 = 목표값 - 두 사각형 크기 차이 - 9.5
+        // 9.5 = 좌우(또는 상하) 여유 4.5 + 4.5 + 추가 보정 0.5
+        // 해당 패널이 없으면 재생성 크기 = 목표값 - 45.5
         (double vertex16TargetWidth, double vertex16TargetHeight) =
             GetVertex16TargetSize(
                 panelGroups,
                 input.TargetWidth,
                 input.TargetHeight
             );
+
 
         RebuildVertex16PanelsFromPreviousPanels(
             drawingData,
@@ -1948,6 +1857,32 @@ internal static class Program
                 continue;
             }
 
+            // 좌·우 세로형 두께 패널 안의 빨간 사각형은
+            // 두께 변화량만큼 가로 크기를 변경하고,
+            // 패널 높이 변화에 맞춰 위/아래 위치를 이동한다.
+            if (IsVerticalThicknessPanelRedBlock(panel, entity))
+            {
+                ResizePolylineFromCenter(
+                    entity,
+                    widthDelta,
+                    0.0
+                );
+
+                double redBlockMoveY = GetDirectionalMove(
+                    entity.CenterBoxY,
+                    basePolyline.CenterBoxY,
+                    heightDelta
+                );
+
+                MoveEntity(
+                    entity.Entity,
+                    0.0,
+                    redBlockMoveY
+                );
+
+                continue;
+            }
+
             if (IsInnerWhiteRectangle(panel, entity))
             {
                 ResizePolylineFromCenter(
@@ -1977,6 +1912,7 @@ internal static class Program
                 moveY
             );
         }
+
     }
 
     /// <summary>
@@ -1988,12 +1924,14 @@ internal static class Program
     /// - 닫힌 4꼭짓점 사각형이 정확히 2개
     ///
     /// 기준 패널이 있으면:
-    /// X = 목표 X - 두 사각형 가로 크기 차이 - 1.5
-    /// Y = 목표 Y - 두 사각형 세로 크기 차이 - 1.5
+    /// X = 목표 X - 두 사각형 가로 크기 차이 - 9.5
+    /// Y = 목표 Y - 두 사각형 세로 크기 차이 - 9.5
+    /// 9.5 = 4.5 + 4.5 + 추가 보정 0.5
     ///
     /// 기준 패널이 없으면:
-    /// X = 목표 X - 21
-    /// Y = 목표 Y - 21
+    /// X = 목표 X - 45.5
+    /// Y = 목표 Y - 45.5
+    /// 45.5 = 18 + 18 + 4.5 + 4.5 + 추가 보정 0.5
     /// </summary>
     private static (double Width, double Height) GetVertex16TargetSize(
         IReadOnlyList<PanelGroup> panelGroups,
@@ -2001,6 +1939,19 @@ internal static class Program
         double targetHeight
     )
     {
+        const double curveMarginPerSide = 4.5;
+        const double additionalCorrection = 0.5;
+        const double fallbackBaseMarginPerSide = 18.0;
+
+        const double rectangleReferenceMargin =
+            curveMarginPerSide * 2.0 +
+            additionalCorrection;
+
+        const double fallbackMargin =
+            fallbackBaseMarginPerSide * 2.0 +
+            curveMarginPerSide * 2.0 +
+            additionalCorrection;
+
         foreach (PanelGroup panel in panelGroups
             .Where(panel => !panel.IsThicknessPanel))
         {
@@ -2022,6 +1973,7 @@ internal static class Program
             {
                 continue;
             }
+
 
             DimensionBounds firstBounds =
                 GetCurrentBounds(rectangles[0].Entity);
@@ -2048,10 +2000,15 @@ internal static class Program
                 Math.Abs(firstHeight - secondHeight);
 
             double calculatedWidth =
-                targetWidth - widthDifference - 8.7;
+                targetWidth -
+                widthDifference -
+                rectangleReferenceMargin;
 
             double calculatedHeight =
-                targetHeight - heightDifference - 8.7;
+                targetHeight -
+                heightDifference -
+                rectangleReferenceMargin;
+
 
             if (calculatedWidth <= 0.0 ||
                 calculatedHeight <= 0.0)
@@ -2071,8 +2028,12 @@ internal static class Program
             );
         }
 
-        double fallbackWidth = targetWidth - 44.7;
-        double fallbackHeight = targetHeight - 44.7;
+        double fallbackWidth =
+            targetWidth - fallbackMargin;
+
+        double fallbackHeight =
+            targetHeight - fallbackMargin;
+
 
         if (fallbackWidth <= 0.0 ||
             fallbackHeight <= 0.0)
@@ -2119,17 +2080,41 @@ internal static class Program
             .Where(panel => !panel.IsThicknessPanel)
             .ToList();
 
-        List<PanelGroup> specialPanels = normalPanels
-            .Where(panel =>
-                panel.BasePolyline.Entity is LwPolyline polyline &&
-                panel.BasePolyline.Vertices.Count == 16 &&
-                polyline.Vertices.Count == 16)
-            .ToList();
+        // 기존에는 패널의 기준 외곽선(BasePolyline)이 16꼭짓점인 경우만
+        // 재생성했다. 따라서 "바깥 사각형 -> 안쪽 사각형 -> 16꼭짓점 형상"
+        // 구조에서는 안쪽 16꼭짓점 형상이 패널 구성원인데도 누락됐다.
+        // 이제 각 일반 패널의 모든 구성원을 검사하여 내부에 들어 있는
+        // 16꼭짓점 LWPOLYLINE도 같은 재생성 대상으로 포함한다.
+        List<(PanelGroup Panel, EntityData Polyline)> specialPolylines = new();
+        HashSet<string> specialPolylineHandles = new(
+            StringComparer.OrdinalIgnoreCase
+        );
 
-        if (specialPanels.Count == 0)
+        foreach (PanelGroup panel in normalPanels)
+        {
+            foreach (EntityData entity in panel.Entities)
+            {
+                if (entity.Entity is not LwPolyline polyline ||
+                    !polyline.IsClosed ||
+                    polyline.Vertices.Count != 16)
+                {
+                    continue;
+                }
+
+                if (!specialPolylineHandles.Add(entity.Handle))
+                {
+                    continue;
+                }
+
+                specialPolylines.Add((panel, entity));
+            }
+        }
+
+        if (specialPolylines.Count == 0)
         {
             return;
         }
+
 
         // 어느 패널이든 치구 레이어 모서리 구멍이 있으면 반지름 기준으로 사용할 수 있다.
         // 발견된 모서리 구멍 중 가장 큰 현재 반지름을 사용한다.
@@ -2152,27 +2137,37 @@ internal static class Program
             return;
         }
 
-        foreach (PanelGroup specialPanel in specialPanels)
+
+        foreach ((PanelGroup specialPanel, EntityData specialPolyline) in
+                 specialPolylines)
         {
             RebuildVertex16PanelLikeOldFourthPanel(
                 drawingData,
                 specialPanel,
+                specialPolyline,
                 targetWidth,
                 targetHeight,
                 radiusSource.Radius
             );
+
         }
     }
 
+    /// <summary>
+    /// 16꼭짓점 패널을 변경된 모서리 구멍 반지름에 맞춰 다시 만든다.
+    /// 기존 패널의 중심을 유지하며, 각 모서리는
+    /// (R-4.5), R, (R-4.5) 반지름의 90도 호 3개로 구성한다.
+    /// </summary>
     private static void RebuildVertex16PanelLikeOldFourthPanel(
         DrawingData drawingData,
         PanelGroup panel,
+        EntityData vertex16PanelData,
         double targetWidth,
         double targetHeight,
         double holeRadius
     )
     {
-        EntityData oldPanelData = panel.BasePolyline;
+        EntityData oldPanelData = vertex16PanelData;
 
         if (oldPanelData.Entity is not LwPolyline oldPolyline ||
             oldPolyline.Vertices.Count != 16)
@@ -2180,7 +2175,7 @@ internal static class Program
             return;
         }
 
-        double smallRadius = holeRadius - 4.0;
+        double smallRadius = holeRadius - 4.5;
         double cornerLength =
             holeRadius + smallRadius * 2.0;
 
@@ -2285,7 +2280,14 @@ internal static class Program
             panel.Entities.Add(replacementData);
         }
 
-        panel.BasePolyline = replacementData;
+        // 16꼭짓점 형상이 패널의 기준 외곽선이었던 경우에만 기준 객체를
+        // 교체한다. 사각형 안쪽의 구성원인 경우에는 바깥/안쪽 사각형을
+        // 그대로 기준으로 유지하고 구성원만 새 형상으로 교체한다.
+        if (ReferenceEquals(panel.BasePolyline, oldPanelData) ||
+            ReferenceEquals(panel.BasePolyline.Entity, oldPolyline))
+        {
+            panel.BasePolyline = replacementData;
+        }
     }
 
     /// <summary>
@@ -2456,13 +2458,12 @@ internal static class Program
             circle.Center.Z
         );
 
+
         return Math.Abs(newRadius - oldRadius) > 0.000001;
     }
 
     /// <summary>
-    /// 꼭짓점이 16개인 특수 패널을 변경된 모서리 구멍 반지름에 맞춰 다시 만든다.
-    /// 현재 수정된 패널 외곽 크기와 중심은 유지하고, 각 모서리를
-    /// (R-4), R, (R-4) 반지름의 90도 호 3개로 구성한다.
+    /// 16꼭짓점 패널 폴리선에 좌표와 곡률값을 가진 꼭짓점 하나를 추가한다.
     /// </summary>
     private static void AddVertex16PanelPoint(
         LwPolyline polyline,
@@ -2481,10 +2482,6 @@ internal static class Program
         polyline.Vertices.Add(vertex);
     }
 
-    /// <summary>
-    /// 패널 기준 폴리선 안쪽에 있는 흰색 닫힌 사각형인지 확인한다.
-    /// 기준 폴리선 자기 자신과 볼트 구멍 레이어는 제외한다.
-    /// </summary>
     /// <summary>
     /// 상·하 가로형 두께 패널 내부의 빨간 닫힌 사각형인지 확인한다.
     /// 빨간색은 ACI 1 기준이며, 기준 두께 패널 자신과 볼트 구멍은 제외한다.
@@ -2539,6 +2536,63 @@ internal static class Program
             entity.CenterBoxY <= panel.BasePolyline.MaxY + panel.SearchMargin + tolerance;
     }
 
+    /// <summary>
+    /// 좌·우 세로형 두께 패널 내부의 빨간 닫힌 사각형인지 확인한다.
+    /// 빨간색은 ACI 1 기준이며, 기준 두께 패널 자신과 볼트 구멍은 제외한다.
+    /// </summary>
+    private static bool IsVerticalThicknessPanelRedBlock(
+        PanelGroup panel,
+        EntityData entity
+    )
+    {
+        if (!panel.IsThicknessPanel ||
+            panel.ThicknessDirection != ThicknessPanelDirection.Vertical)
+        {
+            return false;
+        }
+
+        if (ReferenceEquals(entity, panel.BasePolyline))
+        {
+            return false;
+        }
+
+        if (string.Equals(
+                entity.LayerName,
+                "볼트 구멍",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        if (entity.Entity is not LwPolyline polyline)
+        {
+            return false;
+        }
+
+        if (!polyline.IsClosed || polyline.Vertices.Count != 4)
+        {
+            return false;
+        }
+
+        if (entity.ColorIndex != 1)
+        {
+            return false;
+        }
+
+        const double tolerance = 0.001;
+
+        // 빨간 박스 중심이 세로형 두께 패널의 기존 검색 범위 안에 있어야 한다.
+        return
+            entity.CenterBoxX >= panel.BasePolyline.MinX - panel.SearchMargin - tolerance &&
+            entity.CenterBoxX <= panel.BasePolyline.MaxX + panel.SearchMargin + tolerance &&
+            entity.CenterBoxY >= panel.BasePolyline.MinY - tolerance &&
+            entity.CenterBoxY <= panel.BasePolyline.MaxY + tolerance;
+    }
+
+    /// <summary>
+    /// 패널 기준 폴리선 안쪽에 있는 흰색 닫힌 사각형인지 확인한다.
+    /// 기준 폴리선 자기 자신과 볼트 구멍 레이어는 제외한다.
+    /// </summary>
     private static bool IsInnerWhiteRectangle(
         PanelGroup panel,
         EntityData entity
@@ -2904,6 +2958,7 @@ internal static class Program
             return;
         }
 
+
         List<HoleClearanceWarning> ordered = warnings
             .OrderBy(item => item.Clearance)
             .ThenBy(item => item.PanelNumber)
@@ -3006,7 +3061,9 @@ internal static class Program
 
     private static void ArrangePanelGroupsWithGap(
         IReadOnlyList<PanelGroup> panelGroups,
-        double gap
+        double gap,
+        IReadOnlyDictionary<PanelGroup, List<PanelGroup>>
+            originalNestedVertex16Bindings
     )
     {
         if (gap < 0.0)
@@ -3014,9 +3071,33 @@ internal static class Program
             throw new ArgumentOutOfRangeException(nameof(gap));
         }
 
-        // 원래 도면에서의 일반 패널 좌우 순서를 먼저 기억한다.
-        List<PanelGroup> mainPanels = panelGroups
+        List<PanelGroup> normalPanels = panelGroups
             .Where(panel => !panel.IsThicknessPanel)
+            .ToList();
+
+        // 사각형 패널 안에 들어 있던 16꼭짓점 패널은 크기 수정에서는
+        // 독립 패널로 유지하지만 재배치에서는 원래 바깥 사각형에 연결한다.
+        Dictionary<PanelGroup, List<PanelGroup>> nestedVertex16Bindings =
+            normalPanels.ToDictionary(
+                panel => panel,
+                panel => originalNestedVertex16Bindings.TryGetValue(
+                    panel,
+                    out List<PanelGroup>? nestedPanels)
+                        ? nestedPanels
+                            .Where(normalPanels.Contains)
+                            .ToList()
+                        : new List<PanelGroup>()
+            );
+
+        HashSet<PanelGroup> boundNestedVertex16Panels =
+            nestedVertex16Bindings
+                .SelectMany(binding => binding.Value)
+                .ToHashSet();
+
+        // 바깥 사각형에 연결된 중첩 16꼭짓점은 독립적인 50 간격
+        // 재배치 대상에서 제외한다. 단독 16꼭짓점은 그대로 포함한다.
+        List<PanelGroup> mainPanels = normalPanels
+            .Where(panel => !boundNestedVertex16Panels.Contains(panel))
             .OrderBy(panel => GetCurrentBounds(panel.BasePolyline.Entity).MinX)
             .ThenBy(panel => GetCurrentBounds(panel.BasePolyline.Entity).MinY)
             .ToList();
@@ -3037,6 +3118,7 @@ internal static class Program
                 thicknessPanels
             );
 
+
         // 먼저 각 일반 패널 주변에 연결된 두께 패널을
         // 위/아래/좌/우 50 간격 위치로 확정한다.
         foreach (PanelGroup mainPanel in mainPanels)
@@ -3054,13 +3136,15 @@ internal static class Program
                 attachedPanels,
                 gap
             );
+
         }
 
         // 첫 번째 조립 묶음은 현재 위치에 고정한다.
         DimensionBounds previousAssemblyBounds =
             GetAssemblyBounds(
                 mainPanels[0],
-                thicknessBindings[mainPanels[0]]
+                thicknessBindings[mainPanels[0]],
+                nestedVertex16Bindings[mainPanels[0]]
             );
 
         // 두 번째 조립 묶음부터 이전 조립 묶음 전체 오른쪽 끝에서 gap만큼 띄운다.
@@ -3073,7 +3157,8 @@ internal static class Program
             DimensionBounds currentAssemblyBounds =
                 GetAssemblyBounds(
                     mainPanel,
-                    attachedPanels
+                    attachedPanels,
+                    nestedVertex16Bindings[mainPanel]
                 );
 
             double targetMinX =
@@ -3082,9 +3167,11 @@ internal static class Program
             double moveX =
                 targetMinX - currentAssemblyBounds.MinX;
 
+
             MovePanelAssembly(
                 mainPanel,
                 attachedPanels,
+                nestedVertex16Bindings[mainPanel],
                 moveX,
                 0.0
             );
@@ -3092,7 +3179,8 @@ internal static class Program
             previousAssemblyBounds =
                 GetAssemblyBounds(
                     mainPanel,
-                    attachedPanels
+                    attachedPanels,
+                    nestedVertex16Bindings[mainPanel]
                 );
         }
     }
@@ -3104,7 +3192,8 @@ internal static class Program
     /// </summary>
     private static DimensionBounds GetAssemblyBounds(
         PanelGroup mainPanel,
-        IReadOnlyList<PanelGroup> attachedPanels
+        IReadOnlyList<PanelGroup> attachedPanels,
+        IReadOnlyList<PanelGroup> nestedVertex16Panels
     )
     {
         List<PanelGroup> allPanels = new()
@@ -3113,6 +3202,7 @@ internal static class Program
         };
 
         allPanels.AddRange(attachedPanels);
+        allPanels.AddRange(nestedVertex16Panels);
 
         double minX = double.MaxValue;
         double minY = double.MaxValue;
@@ -3168,6 +3258,7 @@ internal static class Program
     private static void MovePanelAssembly(
         PanelGroup mainPanel,
         IReadOnlyList<PanelGroup> attachedPanels,
+        IReadOnlyList<PanelGroup> nestedVertex16Panels,
         double moveX,
         double moveY
     )
@@ -3178,6 +3269,7 @@ internal static class Program
         };
 
         allPanels.AddRange(attachedPanels);
+        allPanels.AddRange(nestedVertex16Panels);
 
         foreach (EntityData entity in allPanels
             .SelectMany(panel => panel.Entities)
@@ -3190,6 +3282,72 @@ internal static class Program
                 moveY
             );
         }
+    }
+
+    /// <summary>
+    /// 사각형 패널 안에 완전히 들어 있는 16꼭짓점 독립 패널을 찾아
+    /// 가장 작은 바깥 패널에 연결한다. 연결된 16꼭짓점 패널은
+    /// 독립 재배치하지 않고 바깥 패널과 같은 이동량을 사용한다.
+    /// </summary>
+    private static Dictionary<PanelGroup, List<PanelGroup>>
+        BindNestedVertex16Panels(
+            IReadOnlyList<PanelGroup> normalPanels
+        )
+    {
+        Dictionary<PanelGroup, List<PanelGroup>> result =
+            normalPanels.ToDictionary(
+                panel => panel,
+                _ => new List<PanelGroup>()
+            );
+
+        List<PanelGroup> hostPanels = normalPanels
+            .Where(panel =>
+                !IsVertex16PanelBase(panel.BasePolyline) &&
+                IsClosedFourVertexRectangle(panel.BasePolyline))
+            .ToList();
+
+        List<PanelGroup> vertex16Panels = normalPanels
+            .Where(panel => IsVertex16PanelBase(panel.BasePolyline))
+            .ToList();
+
+        const double tolerance = 0.001;
+
+        foreach (PanelGroup vertex16Panel in vertex16Panels)
+        {
+            DimensionBounds vertex16Bounds =
+                GetCurrentBounds(vertex16Panel.BasePolyline.Entity);
+
+            PanelGroup? containingPanel = hostPanels
+                .Where(hostPanel =>
+                {
+                    DimensionBounds hostBounds =
+                        GetCurrentBounds(hostPanel.BasePolyline.Entity);
+
+                    return
+                        vertex16Bounds.MinX >= hostBounds.MinX - tolerance &&
+                        vertex16Bounds.MaxX <= hostBounds.MaxX + tolerance &&
+                        vertex16Bounds.MinY >= hostBounds.MinY - tolerance &&
+                        vertex16Bounds.MaxY <= hostBounds.MaxY + tolerance;
+                })
+                // 여러 외곽에 포함되는 경우 가장 가까운 안쪽 외곽을 선택한다.
+                .OrderBy(hostPanel =>
+                {
+                    DimensionBounds hostBounds =
+                        GetCurrentBounds(hostPanel.BasePolyline.Entity);
+
+                    return
+                        (hostBounds.MaxX - hostBounds.MinX) *
+                        (hostBounds.MaxY - hostBounds.MinY);
+                })
+                .FirstOrDefault();
+
+            if (containingPanel != null)
+            {
+                result[containingPanel].Add(vertex16Panel);
+            }
+        }
+
+        return result;
     }
 
     /// <summary>
@@ -3345,6 +3503,7 @@ internal static class Program
                 GetCurrentBounds(panel.BasePolyline.Entity).MinY)
             .ToList();
 
+
         double nextTopMinY = mainBounds.MaxY + gap;
 
         foreach (PanelGroup panel in topPanels)
@@ -3357,6 +3516,7 @@ internal static class Program
 
             double moveX = mainCenterX - panelCenterX;
             double moveY = nextTopMinY - bounds.MinY;
+
 
             MovePanelGroup(panel, moveX, moveY);
 
@@ -3378,6 +3538,7 @@ internal static class Program
 
             double moveX = mainCenterX - panelCenterX;
             double moveY = nextBottomMaxY - bounds.MaxY;
+
 
             MovePanelGroup(panel, moveX, moveY);
 
@@ -3409,6 +3570,7 @@ internal static class Program
                 GetCurrentBounds(panel.BasePolyline.Entity).MinX)
             .ToList();
 
+
         double nextLeftMaxX = mainBounds.MinX - gap;
 
         foreach (PanelGroup panel in leftPanels)
@@ -3421,6 +3583,7 @@ internal static class Program
 
             double moveX = nextLeftMaxX - bounds.MaxX;
             double moveY = mainCenterY - panelCenterY;
+
 
             MovePanelGroup(panel, moveX, moveY);
 
@@ -3442,6 +3605,7 @@ internal static class Program
 
             double moveX = nextRightMinX - bounds.MinX;
             double moveY = mainCenterY - panelCenterY;
+
 
             MovePanelGroup(panel, moveX, moveY);
 
@@ -3606,7 +3770,7 @@ internal static class Program
 
     /// <summary>
     /// 수정된 DWG를 원본과 다른 경로에 저장한다.
-    /// 이후 버전 2 수정 작업이 추가되면 마지막 단계에서 호출한다.
+    /// 저장 직전에 전체 객체를 검증한 뒤 DWG 파일을 기록한다.
     /// </summary>
     private static void SaveAsNewDwg(
         CadDocument document,
