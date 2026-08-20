@@ -18,11 +18,12 @@ namespace DwgAutoResize;
 /// 현재 포함된 기능:
 /// 1. DWG 파일 선택 UI
 /// 2. DWG 파일 읽기
-/// 3. 일반/두께/중첩 16꼭짓점 패널 분류
-/// 4. 입력한 X/Y/두께에 맞춘 패널 및 치수 수정
-/// 5. 볼트 구멍 삭제 확인과 구멍 간격 경고
-/// 6. 중첩 관계를 유지한 50 간격 재배치
-/// 7. 객체 검증 후 새 DWG 저장
+/// 3. 전체 객체 정보와 패널 분류 정보 TXT 출력
+/// 4. 일반/두께/중첩 16꼭짓점 패널 분류
+/// 5. 입력한 X/Y/두께에 맞춘 패널 및 치수 수정
+/// 6. 볼트 구멍 삭제 확인과 구멍 간격 경고
+/// 7. 중첩 관계를 유지한 50 간격 재배치
+/// 8. 객체 검증 후 새 DWG 저장
 /// </summary>
 internal static class Program_V2
 {
@@ -49,6 +50,17 @@ internal static class Program_V2
 
             string fileName =
                 Path.GetFileNameWithoutExtension(dwgPath);
+
+            string objectReportPath = Path.Combine(
+                directory,
+                $"{fileName}_objects_v2.txt"
+            );
+
+            SaveEntityReport(
+                drawingData,
+                objectReportPath
+            );
+
             // 패널 기준 객체:
             // Layer="치구", POLYLINE 계열, 실제 표시 색상=흰색(ACI 7)
             // 기준 폴리선의 외곽을 사방 30만큼 확장한 범위에
@@ -75,6 +87,16 @@ internal static class Program_V2
                             .Where(panel => !panel.IsThicknessPanel)
                             .ToList()
                     );
+
+            string panelReportPath = Path.Combine(
+                directory,
+                $"{fileName}_panels_v2.txt"
+            );
+
+            SavePanelGroupReport(
+                panelGroups,
+                panelReportPath
+            );
 
             // 수정 UI에 표시할 현재값은 폴리선 크기가 아니라 DWG 치수값으로 읽는다.
             // X/Y는 일반 패널 중 면적이 가장 큰 사각형 패널의 가로/세로 치수,
@@ -406,6 +428,174 @@ internal static class Program_V2
         }
     }
 
+    /// <summary>
+    /// 현재 수집된 모든 객체의 종류, 레이어, 좌표 및 크기를 TXT 파일로 출력한다.
+    /// </summary>
+    private static void SaveEntityReport(
+        DrawingData drawingData,
+        string outputPath
+    )
+    {
+        using StreamWriter writer = new(
+            outputPath,
+            false
+        );
+
+        writer.WriteLine($"DWG 버전: {drawingData.Version}");
+        writer.WriteLine($"레이어 수: {drawingData.LayerCount}");
+        writer.WriteLine($"블록 수: {drawingData.BlockCount}");
+        writer.WriteLine($"Model Space 객체 수: {drawingData.EntityCount}");
+        writer.WriteLine();
+
+        for (int index = 0;
+             index < drawingData.Entities.Count;
+             index++)
+        {
+            EntityData entity = drawingData.Entities[index];
+
+            writer.WriteLine(
+                $"[{index}] 종류={entity.ObjectName}, " +
+                $"Handle={entity.Handle}, " +
+                $"Layer={entity.LayerName}, " +
+                $"ColorIndex={entity.ColorIndex}"
+            );
+
+            WriteEntityCoordinates(
+                writer,
+                entity
+            );
+
+            if (entity.HasBoundingBox)
+            {
+                writer.WriteLine(
+                    "  Bounds=" +
+                    $"Min({entity.MinX:F6}, {entity.MinY:F6}, {entity.MinZ:F6}), " +
+                    $"Max({entity.MaxX:F6}, {entity.MaxY:F6}, {entity.MaxZ:F6})"
+                );
+
+                writer.WriteLine(
+                    "  Size=" +
+                    $"Width={entity.Width:F6}, " +
+                    $"Height={entity.Height:F6}, " +
+                    $"Depth={entity.Depth:F6}, " +
+                    "Center=" +
+                    $"({entity.CenterBoxX:F6}, {entity.CenterBoxY:F6}, {entity.CenterBoxZ:F6})"
+                );
+            }
+            else
+            {
+                writer.WriteLine("  Bounds=지원하지 않음");
+            }
+
+            writer.WriteLine();
+        }
+    }
+
+    /// <summary>
+    /// 객체 종류별 핵심 좌표를 객체 정보 보고서에 기록한다.
+    /// </summary>
+    private static void WriteEntityCoordinates(
+        StreamWriter writer,
+        EntityData entity
+    )
+    {
+        switch (entity.ObjectName)
+        {
+            case "LINE":
+                writer.WriteLine(
+                    "  Start=" +
+                    $"({entity.StartX:F6}, {entity.StartY:F6}, {entity.StartZ:F6})"
+                );
+                writer.WriteLine(
+                    "  End=" +
+                    $"({entity.EndX:F6}, {entity.EndY:F6}, {entity.EndZ:F6})"
+                );
+                break;
+
+            case "ARC":
+                writer.WriteLine(
+                    "  Center=" +
+                    $"({entity.CenterX:F6}, {entity.CenterY:F6}, {entity.CenterZ:F6})"
+                );
+                writer.WriteLine(
+                    $"  Radius={entity.Radius:F6}, " +
+                    $"Diameter={entity.Diameter:F6}, " +
+                    $"StartAngle={entity.StartAngle:F6}, " +
+                    $"EndAngle={entity.EndAngle:F6}"
+                );
+                break;
+
+            case "CIRCLE":
+                writer.WriteLine(
+                    "  Center=" +
+                    $"({entity.CenterX:F6}, {entity.CenterY:F6}, {entity.CenterZ:F6})"
+                );
+                writer.WriteLine(
+                    $"  Radius={entity.Radius:F6}, " +
+                    $"Diameter={entity.Diameter:F6}"
+                );
+                break;
+
+            case "LWPOLYLINE":
+            case "POLYLINE2D":
+                writer.WriteLine(
+                    $"  Closed={entity.IsClosed}, " +
+                    $"VertexCount={entity.Vertices.Count}"
+                );
+
+                for (int index = 0;
+                     index < entity.Vertices.Count;
+                     index++)
+                {
+                    PointData point = entity.Vertices[index];
+
+                    writer.WriteLine(
+                        $"  Vertex[{index}]=" +
+                        $"({point.X:F6}, {point.Y:F6}, {point.Z:F6}), " +
+                        $"Bulge={point.Bulge:F12}"
+                    );
+                }
+                break;
+
+            case "TEXT":
+            case "MTEXT":
+                writer.WriteLine(
+                    "  Insert=" +
+                    $"({entity.InsertX:F6}, {entity.InsertY:F6}, {entity.InsertZ:F6})"
+                );
+                writer.WriteLine($"  Text=\"{entity.TextValue}\"");
+                break;
+
+            case "INSERT":
+                writer.WriteLine($"  Block={entity.BlockName}");
+                writer.WriteLine(
+                    "  Insert=" +
+                    $"({entity.InsertX:F6}, {entity.InsertY:F6}, {entity.InsertZ:F6})"
+                );
+                break;
+
+            case "DIMENSION":
+                writer.WriteLine($"  Text=\"{entity.TextValue}\"");
+                writer.WriteLine(
+                    "  FirstPoint=" +
+                    $"({entity.FirstPointX:F6}, {entity.FirstPointY:F6}, {entity.FirstPointZ:F6})"
+                );
+                writer.WriteLine(
+                    "  SecondPoint=" +
+                    $"({entity.SecondPointX:F6}, {entity.SecondPointY:F6}, {entity.SecondPointZ:F6})"
+                );
+                writer.WriteLine(
+                    "  DefinitionPoint=" +
+                    $"({entity.DefinitionPointX:F6}, {entity.DefinitionPointY:F6}, {entity.DefinitionPointZ:F6})"
+                );
+                writer.WriteLine(
+                    "  TextPosition=" +
+                    $"({entity.TextPositionX:F6}, {entity.TextPositionY:F6}, {entity.TextPositionZ:F6})"
+                );
+                break;
+        }
+    }
+
 
     /// <summary>
     /// 엔티티의 실제 표시 색상 ACI 번호를 구한다.
@@ -500,11 +690,25 @@ internal static class Program_V2
             .Where(x => x.HasBoundingBox)
             .ToList();
 
+        // 16꼭짓점 외곽은 ColorIndex가 0 또는 7이면 독립 패널 후보로 사용한다.
+        // ColorIndex=0인 형상이 바깥 사각형의 일반 구성원으로 들어가는 것을 막기 위해
+        // 흰색 폴리선 목록과 별도로 먼저 패널 후보 목록에 추가한다.
+        List<EntityData> vertex16PanelBases = drawingData.Entities
+            .Where(IsVertex16PanelBase)
+            .Where(x => x.HasBoundingBox)
+            .ToList();
+
+        List<EntityData> allPanelCandidates = allWhiteChiguPolylines
+            .Concat(vertex16PanelBases)
+            .GroupBy(x => x.Handle, StringComparer.OrdinalIgnoreCase)
+            .Select(group => group.First())
+            .ToList();
+
         // 다른 흰색 치구 폴리선 안에 완전히 들어가는 일반 사각형은
         // 독립 일반 패널 기준이 아니라 내부 사각형으로 취급한다.
-        // 단, 닫힌 16꼭짓점 LWPOLYLINE은 사각형 안에 들어 있어도
-        // 별도의 독립 패널 기준으로 승격한다.
-        List<EntityData> allPanelBases = allWhiteChiguPolylines
+        // 단, ColorIndex 0/7인 닫힌 16꼭짓점 LWPOLYLINE은
+        // 사각형 안에 들어 있어도 별도의 독립 패널 기준으로 승격한다.
+        List<EntityData> allPanelBases = allPanelCandidates
             .Where(candidate =>
                 IsVertex16PanelBase(candidate) ||
                 !allWhiteChiguPolylines.Any(other =>
@@ -787,16 +991,22 @@ internal static class Program_V2
 
     /// <summary>
     /// 사각형 안에 중첩되어 있어도 독립 패널로 분리할 16꼭짓점 외곽인지 확인한다.
+    /// 치구 레이어의 ColorIndex 0 또는 7인 닫힌 LWPOLYLINE만 허용한다.
     /// </summary>
     private static bool IsVertex16PanelBase(
         EntityData entity
     )
     {
         return
-            IsWhiteChiguPolyline(entity) &&
+            string.Equals(
+                entity.LayerName,
+                "치구",
+                StringComparison.OrdinalIgnoreCase
+            ) &&
             entity.ObjectName == "LWPOLYLINE" &&
             entity.IsClosed &&
-            entity.Vertices.Count == 16;
+            entity.Vertices.Count == 16 &&
+            (entity.ColorIndex == 0 || entity.ColorIndex == 7);
     }
 
     /// <summary>
@@ -858,6 +1068,65 @@ internal static class Program_V2
 
             _ => null
         };
+    }
+
+    /// <summary>
+    /// 찾은 패널의 기준 외곽, 검색 범위, 분류 결과 및 구성 객체를 TXT 파일로 출력한다.
+    /// </summary>
+    private static void SavePanelGroupReport(
+        IReadOnlyList<PanelGroup> panelGroups,
+        string outputPath
+    )
+    {
+        using StreamWriter writer = new(
+            outputPath,
+            false
+        );
+
+        writer.WriteLine($"찾은 패널 수: {panelGroups.Count}");
+        writer.WriteLine("기준: Layer=치구, POLYLINE, ColorIndex=7(흰색)");
+        writer.WriteLine("포함 범위: 각 기준 폴리선에 설정된 검색 범위 사용");
+        writer.WriteLine();
+
+        foreach (PanelGroup panel in panelGroups)
+        {
+            writer.WriteLine($"[패널 {panel.Number}]");
+            writer.WriteLine(
+                $"기준 Handle={panel.BasePolyline.Handle}, " +
+                $"Type={panel.BasePolyline.ObjectName}, " +
+                $"Layer={panel.BasePolyline.LayerName}, " +
+                $"ColorIndex={panel.BasePolyline.ColorIndex}"
+            );
+            writer.WriteLine(
+                "기준 Bounds=" +
+                $"({panel.BasePolyline.MinX:F6}, {panel.BasePolyline.MinY:F6}) ~ " +
+                $"({panel.BasePolyline.MaxX:F6}, {panel.BasePolyline.MaxY:F6})"
+            );
+            writer.WriteLine(
+                "검색 Bounds=" +
+                $"({panel.SearchMinX:F6}, {panel.SearchMinY:F6}) ~ " +
+                $"({panel.SearchMaxX:F6}, {panel.SearchMaxY:F6}), " +
+                $"Margin={panel.SearchMargin:F6}"
+            );
+            writer.WriteLine($"묶인 객체 수={panel.Entities.Count}");
+            writer.WriteLine(
+                $"두께 패널={panel.IsThicknessPanel}, " +
+                $"방향={panel.ThicknessDirection}, " +
+                $"가로세로비={panel.AspectRatio:F3}"
+            );
+
+            foreach (EntityData entity in panel.Entities)
+            {
+                writer.WriteLine(
+                    $"  Handle={entity.Handle}, " +
+                    $"Type={entity.ObjectName}, " +
+                    $"Layer={entity.LayerName}, " +
+                    $"ColorIndex={entity.ColorIndex}"
+                );
+            }
+
+            writer.WriteLine();
+        }
     }
 
     /// <summary>
@@ -1669,6 +1938,13 @@ internal static class Program_V2
         double widthDelta = input.TargetWidth - current.Width;
         double heightDelta = input.TargetHeight - current.Height;
 
+        // 두께 패널의 실제 외곽 크기를 목표 두께로 덮어쓰지 않고,
+        // 도면에서 읽은 현재 두께 치수와 목표 두께의 차이만큼 증감한다.
+        double thicknessDelta =
+            input.TargetThickness.HasValue && current.Thickness.HasValue
+                ? input.TargetThickness.Value - current.Thickness.Value
+                : 0.0;
+
 
         HashSet<string> processedHandles = new();
 
@@ -1694,24 +1970,18 @@ internal static class Program_V2
             }
             else if (panel.ThicknessDirection == ThicknessPanelDirection.Horizontal)
             {
-                // 상·하 두께 패널은 자신의 현재 크기를 기준으로
-                // 최종 가로=목표 X, 최종 세로=목표 두께가 되게 한다.
+                // 상·하 두께 패널의 긴 방향은 목표 X에 맞추고,
+                // 짧은 방향은 두께 치수의 변화량만큼 늘리거나 줄인다.
                 panelWidthDelta =
                     input.TargetWidth - currentPanelWidth;
 
-                panelHeightDelta = input.TargetThickness.HasValue
-                    ? input.TargetThickness.Value - currentPanelHeight
-                    : 0.0;
+                panelHeightDelta = thicknessDelta;
             }
             else if (panel.ThicknessDirection == ThicknessPanelDirection.Vertical)
             {
-                // 좌·우 두께 패널은 공통 HeightDelta를 더하는 방식이 아니라
-                // 자신의 실제 현재 높이에서 목표 Y까지 직접 계산한다.
-                // 따라서 원본 좌우 패널 높이가 기준 패널과 달라도
-                // 최종 높이는 반드시 입력한 목표 Y와 같아진다.
-                panelWidthDelta = input.TargetThickness.HasValue
-                    ? input.TargetThickness.Value - currentPanelWidth
-                    : 0.0;
+                // 좌·우 두께 패널의 짧은 방향도 같은 두께 변화량을 사용하고,
+                // 긴 방향은 자신의 실제 높이에서 목표 Y까지 계산한다.
+                panelWidthDelta = thicknessDelta;
 
                 panelHeightDelta =
                     input.TargetHeight - currentPanelHeight;
@@ -1731,9 +2001,9 @@ internal static class Program_V2
 
         }
 
-        // 원이 없고 사각형이 정확히 2개인 패널이 있으면,
-        // 두 사각형의 가로/세로 크기 차이를 재생성 여유값으로 사용한다.
-        // 재생성 크기 = 목표값 - 두 사각형 크기 차이 - 9.5
+        // 원이 없고 바깥 사각형 안에 닫힌 8꼭짓점 이하 치구 폴리선이
+        // 정확히 하나 있는 패널을 찾으면 두 외곽의 크기 차이를 사용한다.
+        // 재생성 크기 = 목표값 - 두 외곽 크기 차이 - 9.5
         // 9.5 = 좌우(또는 상하) 여유 4.5 + 4.5 + 추가 보정 0.5
         // 해당 패널이 없으면 재생성 크기 = 목표값 - 45.5
         (double vertex16TargetWidth, double vertex16TargetHeight) =
@@ -1883,9 +2153,13 @@ internal static class Program_V2
                 continue;
             }
 
-            if (IsInnerWhiteRectangle(panel, entity))
+            if (IsInnerChiguPolylineWithAtMost8Vertices(panel, entity))
             {
-                ResizePolylineFromCenter(
+                // 내부 폴리선의 호(Bulge) 양 끝점을 따로 벌리면
+                // 현 길이가 변하면서 호 반지름까지 커진다.
+                // 호로 연결된 꼭짓점은 한 묶음으로 평행 이동해
+                // 기존 호 크기와 모양을 유지한 채 전체 폭/높이만 조절한다.
+                ResizeInnerPolylinePreservingArcsFromCenter(
                     entity,
                     widthDelta,
                     heightDelta
@@ -1921,11 +2195,13 @@ internal static class Program_V2
     /// 조건에 맞는 기준 패널:
     /// - 원(CIRCLE)이 하나도 없음
     /// - 치수와 텍스트 개수는 무관
-    /// - 닫힌 4꼭짓점 사각형이 정확히 2개
+    /// - 기준 외곽은 닫힌 4꼭짓점 사각형
+    /// - 기준 사각형 안에 완전히 들어 있는 닫힌 치구 폴리선이 정확히 1개
+    /// - 내부 폴리선의 꼭짓점 수는 3개 이상 8개 이하
     ///
     /// 기준 패널이 있으면:
-    /// X = 목표 X - 두 사각형 가로 크기 차이 - 9.5
-    /// Y = 목표 Y - 두 사각형 세로 크기 차이 - 9.5
+    /// X = 목표 X - 바깥 사각형과 내부 폴리선의 가로 크기 차이 - 9.5
+    /// Y = 목표 Y - 바깥 사각형과 내부 폴리선의 세로 크기 차이 - 9.5
     /// 9.5 = 4.5 + 4.5 + 추가 보정 0.5
     ///
     /// 기준 패널이 없으면:
@@ -1955,6 +2231,11 @@ internal static class Program_V2
         foreach (PanelGroup panel in panelGroups
             .Where(panel => !panel.IsThicknessPanel))
         {
+            if (!IsClosedFourVertexRectangle(panel.BasePolyline))
+            {
+                continue;
+            }
+
             bool hasCircle = panel.Entities
                 .Any(entity => entity.Entity is Circle);
 
@@ -1963,41 +2244,48 @@ internal static class Program_V2
                 continue;
             }
 
-            List<EntityData> rectangles = panel.Entities
-                .Where(IsClosedFourVertexRectangle)
+            List<EntityData> innerPolylines = panel.Entities
+                .Where(entity => !ReferenceEquals(entity, panel.BasePolyline))
+                .Where(IsClosedChiguPolylineWithAtMost8Vertices)
+                .Where(entity =>
+                    IsCompletelyInside(
+                        entity,
+                        panel.BasePolyline,
+                        0.001
+                    )
+                )
                 .GroupBy(entity => entity.Handle)
                 .Select(group => group.First())
                 .ToList();
 
-            if (rectangles.Count != 2)
+            if (innerPolylines.Count != 1)
             {
                 continue;
             }
 
+            DimensionBounds outerBounds =
+                GetCurrentBounds(panel.BasePolyline.Entity);
 
-            DimensionBounds firstBounds =
-                GetCurrentBounds(rectangles[0].Entity);
+            DimensionBounds innerBounds =
+                GetCurrentBounds(innerPolylines[0].Entity);
 
-            DimensionBounds secondBounds =
-                GetCurrentBounds(rectangles[1].Entity);
+            double outerWidth =
+                outerBounds.MaxX - outerBounds.MinX;
 
-            double firstWidth =
-                firstBounds.MaxX - firstBounds.MinX;
+            double outerHeight =
+                outerBounds.MaxY - outerBounds.MinY;
 
-            double firstHeight =
-                firstBounds.MaxY - firstBounds.MinY;
+            double innerWidth =
+                innerBounds.MaxX - innerBounds.MinX;
 
-            double secondWidth =
-                secondBounds.MaxX - secondBounds.MinX;
-
-            double secondHeight =
-                secondBounds.MaxY - secondBounds.MinY;
+            double innerHeight =
+                innerBounds.MaxY - innerBounds.MinY;
 
             double widthDifference =
-                Math.Abs(firstWidth - secondWidth);
+                Math.Abs(outerWidth - innerWidth);
 
             double heightDifference =
-                Math.Abs(firstHeight - secondHeight);
+                Math.Abs(outerHeight - innerHeight);
 
             double calculatedWidth =
                 targetWidth -
@@ -2017,7 +2305,7 @@ internal static class Program_V2
                     "16꼭짓점 패널 기준 크기 계산 결과가 0 이하입니다. " +
                     $"Panel={panel.BasePolyline.Handle}, " +
                     $"Target={targetWidth}x{targetHeight}, " +
-                    $"RectangleDifference={widthDifference}x{heightDifference}, " +
+                    $"PolylineDifference={widthDifference}x{heightDifference}, " +
                     $"Calculated={calculatedWidth}x{calculatedHeight}"
                 );
             }
@@ -2064,6 +2352,37 @@ internal static class Program_V2
             Polyline2D polyline =>
                 polyline.IsClosed &&
                 polyline.Vertices.Count == 4,
+
+            _ => false
+        };
+    }
+
+    /// <summary>
+    /// 치구 레이어에 있는 닫힌 폴리선 중 꼭짓점이 3개 이상 8개 이하인지 확인한다.
+    /// </summary>
+    private static bool IsClosedChiguPolylineWithAtMost8Vertices(
+        EntityData entity
+    )
+    {
+        if (!string.Equals(
+                entity.LayerName,
+                "치구",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            return false;
+        }
+
+        return entity.Entity switch
+        {
+            LwPolyline polyline =>
+                polyline.IsClosed &&
+                polyline.Vertices.Count >= 3 &&
+                polyline.Vertices.Count <= 8,
+
+            Polyline2D polyline =>
+                polyline.IsClosed &&
+                polyline.Vertices.Count >= 3 &&
+                polyline.Vertices.Count <= 8,
 
             _ => false
         };
@@ -2353,7 +2672,7 @@ internal static class Program_V2
 
     /// <summary>
     /// 전 버전의 ResizeAndMoveCornerCircles와 같은 방식으로 처리한다.
-    /// 패널 크기 변화율의 평균으로 새 반지름을 구한 뒤 5단위로 반올림하고,
+    /// 패널 크기 변화율의 평균으로 새 반지름을 구한 뒤 2.5단위로 반올림하고,
     /// 반지름 변화분만큼 중심을 안쪽으로 보정해 외곽 쪽 간격이 유지되게 한다.
     /// </summary>
     private static bool ResizeAndMoveCornerHole(
@@ -2388,13 +2707,16 @@ internal static class Program_V2
         double averageScale = (widthScale + heightScale) / 2.0;
 
         double oldRadius = circle.Radius;
-        double newRadius = 5.0 * Math.Round(
-            oldRadius * averageScale / 5.0,
+        const double radiusStep = 2.5;
+
+        double newRadius = radiusStep * Math.Round(
+            oldRadius * averageScale / radiusStep,
             MidpointRounding.AwayFromZero
         );
 
-        // 너무 작아져 0이 되는 경우를 막는다.
-        newRadius = Math.Max(5.0, newRadius);
+        // 2.5단위 배수를 유지하면서 R-4.5가 0 이하가 되지 않도록
+        // 최소 반지름은 5로 제한한다.
+        newRadius = Math.Max(radiusStep * 2.0, newRadius);
 
         double radiusDifference = newRadius - oldRadius;
         double moveX = 0.0;
@@ -2590,10 +2912,11 @@ internal static class Program_V2
     }
 
     /// <summary>
-    /// 패널 기준 폴리선 안쪽에 있는 흰색 닫힌 사각형인지 확인한다.
+    /// 패널 기준 사각형 안쪽에 완전히 들어 있는 닫힌 치구 폴리선 중
+    /// 꼭짓점이 3개 이상 8개 이하인지 확인한다.
     /// 기준 폴리선 자기 자신과 볼트 구멍 레이어는 제외한다.
     /// </summary>
-    private static bool IsInnerWhiteRectangle(
+    private static bool IsInnerChiguPolylineWithAtMost8Vertices(
         PanelGroup panel,
         EntityData entity
     )
@@ -2611,22 +2934,12 @@ internal static class Program_V2
             return false;
         }
 
-        if (entity.Entity is not LwPolyline polyline)
+        if (!IsClosedChiguPolylineWithAtMost8Vertices(entity))
         {
             return false;
         }
 
-        if (!polyline.IsClosed || polyline.Vertices.Count != 4)
-        {
-            return false;
-        }
-
-        if (entity.ColorIndex != 7)
-        {
-            return false;
-        }
-
-        // 실제 외곽 범위가 기준 패널 안에 완전히 들어간 경우만 내부 사각형으로 본다.
+        // 실제 외곽 범위가 기준 패널 안에 완전히 들어간 경우만 내부 폴리선으로 본다.
         const double tolerance = 0.001;
 
         return
@@ -2708,6 +3021,178 @@ internal static class Program_V2
                 throw new Exception(
                     $"패널 기준 객체가 폴리선이 아닙니다. Handle={data.Handle}"
                 );
+        }
+    }
+
+    /// <summary>
+    /// 내부 치구 폴리선의 크기를 변경하되 Bulge 호의 크기는 유지한다.
+    /// 호 구간으로 연결된 꼭짓점들은 동일한 거리만큼 평행 이동하고,
+    /// 호에 연결되지 않은 꼭짓점만 기존 방식대로 중심 기준으로 벌린다.
+    /// </summary>
+    private static void ResizeInnerPolylinePreservingArcsFromCenter(
+        EntityData data,
+        double widthDelta,
+        double heightDelta
+    )
+    {
+        // Polyline2D는 이 프로그램에서 Bulge 값을 읽지 않으므로
+        // 기존 꼭짓점 이동 방식을 그대로 사용한다.
+        if (data.Entity is not LwPolyline polyline)
+        {
+            ResizePolylineFromCenter(
+                data,
+                widthDelta,
+                heightDelta
+            );
+
+            return;
+        }
+
+        int vertexCount = polyline.Vertices.Count;
+
+        if (vertexCount == 0)
+        {
+            return;
+        }
+
+        const double bulgeTolerance = 0.000000001;
+
+        double[] originalX = new double[vertexCount];
+        double[] originalY = new double[vertexCount];
+        double[] moveX = new double[vertexCount];
+        double[] moveY = new double[vertexCount];
+        int[] parent = new int[vertexCount];
+
+        for (int i = 0; i < vertexCount; i++)
+        {
+            originalX[i] = polyline.Vertices[i].Location.X;
+            originalY[i] = polyline.Vertices[i].Location.Y;
+            parent[i] = i;
+
+            moveX[i] = GetDirectionalMove(
+                originalX[i],
+                data.CenterBoxX,
+                widthDelta
+            );
+
+            moveY[i] = GetDirectionalMove(
+                originalY[i],
+                data.CenterBoxY,
+                heightDelta
+            );
+        }
+
+        int FindRoot(int index)
+        {
+            while (parent[index] != index)
+            {
+                parent[index] = parent[parent[index]];
+                index = parent[index];
+            }
+
+            return index;
+        }
+
+        void Union(int first, int second)
+        {
+            int firstRoot = FindRoot(first);
+            int secondRoot = FindRoot(second);
+
+            if (firstRoot != secondRoot)
+            {
+                parent[secondRoot] = firstRoot;
+            }
+        }
+
+        bool hasArc = false;
+
+        for (int i = 0; i < vertexCount; i++)
+        {
+            if (Math.Abs(polyline.Vertices[i].Bulge) <= bulgeTolerance)
+            {
+                continue;
+            }
+
+            int nextIndex = i + 1;
+
+            if (nextIndex >= vertexCount)
+            {
+                if (!polyline.IsClosed)
+                {
+                    continue;
+                }
+
+                nextIndex = 0;
+            }
+
+            Union(i, nextIndex);
+            hasArc = true;
+        }
+
+        // 호가 없는 일반 폴리선은 기존 방식과 완전히 동일하게 처리한다.
+        if (!hasArc)
+        {
+            ResizePolylineFromCenter(
+                data,
+                widthDelta,
+                heightDelta
+            );
+
+            return;
+        }
+
+        Dictionary<int, List<int>> arcGroups = new();
+
+        for (int i = 0; i < vertexCount; i++)
+        {
+            int root = FindRoot(i);
+
+            if (root == i &&
+                !Enumerable.Range(0, vertexCount).Any(index =>
+                    index != i && FindRoot(index) == root))
+            {
+                continue;
+            }
+
+            if (!arcGroups.TryGetValue(root, out List<int>? group))
+            {
+                group = new List<int>();
+                arcGroups.Add(root, group);
+            }
+
+            group.Add(i);
+        }
+
+        foreach (List<int> group in arcGroups.Values)
+        {
+            double groupCenterX = group.Average(index => originalX[index]);
+            double groupCenterY = group.Average(index => originalY[index]);
+
+            double groupMoveX = GetDirectionalMove(
+                groupCenterX,
+                data.CenterBoxX,
+                widthDelta
+            );
+
+            double groupMoveY = GetDirectionalMove(
+                groupCenterY,
+                data.CenterBoxY,
+                heightDelta
+            );
+
+            foreach (int index in group)
+            {
+                moveX[index] = groupMoveX;
+                moveY[index] = groupMoveY;
+            }
+        }
+
+        for (int i = 0; i < vertexCount; i++)
+        {
+            polyline.Vertices[i].Location = new XY(
+                originalX[i] + moveX[i],
+                originalY[i] + moveY[i]
+            );
         }
     }
 
