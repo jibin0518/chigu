@@ -40,7 +40,6 @@ internal static class Program_V2
                 return;
             }
 
-
             CadDocument document = DwgReader.Read(dwgPath);
 
             DrawingData drawingData = ReadDrawingData(document);
@@ -79,7 +78,8 @@ internal static class Program_V2
                 panelGroups
             );
 
-            // 크기 수정 전에 사각형 안 사각형 패널과 그 안의
+            // 크기 수정 전에 바깥 사각형 안에 닫힌 3~8꼭짓점 도형이 있는
+            // 패널과 그 안의
             // 16꼭짓점 패널 관계를 기억한다. 재정렬할 때 둘을 같이 이동시킨다.
             Dictionary<PanelGroup, List<PanelGroup>>
                 originalNestedVertex16Bindings =
@@ -144,11 +144,24 @@ internal static class Program_V2
                 resizeInput.TargetWidth
             );
 
+            // 흰색 치구 원 안에 볼트 구멍 레이어 원이 있는 관계를
+            // 도형 수정과 재배치 전에 기억한다.
+            List<ChiguCircleBoltBinding> chiguCircleBoltBindings =
+                FindChiguCircleBoltBindings(panelGroups);
+
             ApplyPanelResize(
                 drawingData,
                 panelGroups,
                 currentValues,
                 resizeInput
+            );
+
+            // 패널 간격 계산에 수정된 치구 원 크기도 반영되게
+            // 재배치 전에 먼저 목표 지름과 볼트 중심을 적용한다.
+            ResizeChiguCirclesAroundBoltHoles(
+                chiguCircleBoltBindings,
+                resizeInput.TargetWidth,
+                resizeInput.TargetHeight
             );
 
             // 크기와 치수 수정이 끝난 뒤, 현재 패널 외곽 기준으로
@@ -157,6 +170,14 @@ internal static class Program_V2
                 panelGroups,
                 50.0,
                 originalNestedVertex16Bindings
+            );
+
+            // 재배치가 모두 끝난 최종 볼트 구멍 중심을 기준으로
+            // 기존 흰색 치구 원의 중심과 지름을 다시 설정한다.
+            ResizeChiguCirclesAroundBoltHoles(
+                chiguCircleBoltBindings,
+                resizeInput.TargetWidth,
+                resizeInput.TargetHeight
             );
 
             ShowBoltHoleClearanceWarnings(
@@ -692,6 +713,21 @@ internal static class Program_V2
             .Where(x => x.HasBoundingBox)
             .ToList();
 
+        // 흰색 치구 원 안에 볼트 구멍 원이 있으면
+        // 사각형/폴리선과 동일하게 독립 패널 기준으로 사용한다.
+        List<EntityData> allWhiteChiguCircleBases = drawingData.Entities
+            .Where(IsWhiteChiguCircle)
+            .Where(circle => drawingData.Entities.Any(entity =>
+                entity.Entity is Circle &&
+                string.Equals(
+                    entity.LayerName,
+                    "볼트 구멍",
+                    StringComparison.OrdinalIgnoreCase
+                ) &&
+                IsEntityInsideCircle(entity, circle, 0.001)
+            ))
+            .ToList();
+
         // 다른 흰색 치구 폴리선 안에 완전히 들어가는 일반 사각형은
         // 독립 일반 패널 기준이 아니라 내부 사각형으로 취급한다.
         // 단, 닫힌 16꼭짓점 LWPOLYLINE은 사각형 안에 들어 있어도
@@ -704,6 +740,9 @@ internal static class Program_V2
                     IsCompletelyInside(candidate, other, 0.001)
                 )
             )
+            .Concat(allWhiteChiguCircleBases)
+            .GroupBy(entity => entity.Handle)
+            .Select(group => group.First())
             .ToList();
 
         // 각 두께 패널 후보 자신의 수정 전 크기로 최소 비율을 결정한다.
@@ -722,8 +761,10 @@ internal static class Program_V2
 
         List<EntityData> normalPanelBases = allPanelBases
             .Where(x => !thicknessBaseHandles.Contains(x.Handle))
-            // 중첩된 16꼭짓점 패널이 내부 객체를 먼저 소유하도록 먼저 처리한다.
-            .OrderByDescending(IsVertex16PanelBase)
+            // 원형 패널이 내부 볼트 구멍을 먼저 소유하게 하고,
+            // 그 다음 중첩된 16꼭짓점 패널을 처리한다.
+            .OrderByDescending(IsWhiteChiguCircle)
+            .ThenByDescending(IsVertex16PanelBase)
             .ThenBy(x => x.MinX)
             .ThenByDescending(x => x.MaxY)
             .ToList();
@@ -751,8 +792,12 @@ internal static class Program_V2
             bool isVertex16Panel =
                 IsVertex16PanelBase(panelBase);
 
+            bool isCirclePanel =
+                IsWhiteChiguCircle(panelBase);
+
             // 다른 사각형 안에 들어 있지 않은 16꼭짓점만 독립 객체로 본다.
-            // 사각형 안 사각형 패널 내부의 16꼭짓점은 외부 치수를 가져오지 않는다.
+            // 바깥 사각형과 내부 3~8꼭짓점 도형을 가진 패널 안의
+            // 16꼭짓점은 외부 치수를 가져오지 않는다.
             bool isIndependentVertex16Panel =
                 isVertex16Panel &&
                 !allWhiteChiguPolylines.Any(other =>
@@ -784,6 +829,8 @@ internal static class Program_V2
                 // 패널의 구성원으로 다시 들어가지 않게 한다.
                 .Where(x =>
                     ReferenceEquals(x, panelBase) ||
+                    (isCirclePanel &&
+                     IsEntityInsideCircle(x, panelBase, 0.001)) ||
                     (isIndependentVertex16Panel && x.Entity is Dimension) ||
                     (panelBaseHandles.Contains(x.Handle) &&
                      !IsVertex16PanelBase(x)) ||
@@ -805,13 +852,23 @@ internal static class Program_V2
                     IsCompletelyInside(x, panelBase, 0.001) ||
                     (isIndependentVertex16Panel && x.Entity is Dimension)
                 )
+                // 원형 패널의 일반 구성원은 원 내부에 있는 객체만 포함한다.
+                // 치수는 다른 패널과 동일하게 외곽 확장 범위에서 별도 재배정한다.
+                .Where(x =>
+                    !isCirclePanel ||
+                    ReferenceEquals(x, panelBase) ||
+                    x.Entity is Dimension ||
+                    IsEntityInsideCircle(x, panelBase, 0.001)
+                )
                 // 기준 폴리선 자신은 포함한다.
                 // 다른 흰색 치구 폴리선은 기준 패널 안에 완전히 들어간
-                // 내부 사각형일 때만 포함한다.
+                // 내부의 닫힌 폴리선일 때만 포함한다.
                 .Where(x =>
                     ReferenceEquals(x, panelBase) ||
                     !IsWhiteChiguPolyline(x) ||
-                    IsCompletelyInside(x, panelBase, 0.001)
+                    (isCirclePanel
+                        ? IsEntityInsideCircle(x, panelBase, 0.001)
+                        : IsCompletelyInside(x, panelBase, 0.001))
                 )
                 .GroupBy(x => x.Handle)
                 .Select(group => group.First())
@@ -865,6 +922,31 @@ internal static class Program_V2
                 }
             }
 
+            // 원형 패널 안의 볼트 구멍과 일반 구성원은 원형 패널이 소유한다.
+            // 앞서 처리된 두께 패널에 같은 객체가 들어갔다면 중복을 제거한다.
+            if (isCirclePanel)
+            {
+                HashSet<string> circleMemberHandles = members
+                    .Where(entity => entity.Entity is not Dimension)
+                    .Where(entity =>
+                        ReferenceEquals(entity, panelBase) ||
+                        IsEntityInsideCircle(
+                            entity,
+                            panelBase,
+                            0.001
+                        ))
+                    .Select(entity => entity.Handle)
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                foreach (PanelGroup existingPanel in result)
+                {
+                    existingPanel.Entities.RemoveAll(entity =>
+                        !panelBaseHandles.Contains(entity.Handle) &&
+                        circleMemberHandles.Contains(entity.Handle)
+                    );
+                }
+            }
+
             result.Add(panel);
 
             // 일반 구성 객체만 이후 패널 자동 탐색에서 제외한다.
@@ -872,6 +954,13 @@ internal static class Program_V2
             // 두께 패널이 몇 개든 모두 독립적으로 인식되게 한다.
             foreach (EntityData member in members)
             {
+                // 치수는 패널 생성 순서대로 선점하지 않는다.
+                // 모든 패널을 찾은 뒤 거리와 방향을 기준으로 다시 배정한다.
+                if (member.Entity is Dimension)
+                {
+                    continue;
+                }
+
                 if (!panelBaseHandles.Contains(member.Handle) ||
                     ReferenceEquals(member, panelBase))
                 {
@@ -898,6 +987,15 @@ internal static class Program_V2
             );
         }
 
+        // 모든 패널 탐색이 끝난 뒤 치수 소속을 다시 결정한다.
+        // 패널마다 가로 1개와 세로 1개만 허용하므로
+        // 각 패널은 치수를 0~2개까지 포함할 수 있다.
+        AssignDimensionsToPanels(
+            drawingData,
+            result,
+            allWhiteChiguPolylines
+        );
+
         // 출력 순서는 도면상 왼쪽부터 다시 정렬하고 번호를 재지정한다.
         result = result
             .OrderBy(x => x.BasePolyline.MinX)
@@ -910,6 +1008,198 @@ internal static class Program_V2
         }
 
         return result;
+    }
+
+    private static void AssignDimensionsToPanels(
+        DrawingData drawingData,
+        IReadOnlyList<PanelGroup> panels,
+        IReadOnlyList<EntityData> allWhiteChiguPolylines
+    )
+    {
+        // 먼저 기존의 처리 순서 기반 치수 소속을 모두 제거한다.
+        foreach (PanelGroup panel in panels)
+        {
+            panel.Entities.RemoveAll(entity =>
+                entity.Entity is Dimension
+            );
+        }
+
+        var candidates = drawingData.Entities
+            .Where(entity => entity.Entity is Dimension)
+            .SelectMany(dimension => panels
+                .Where(panel => IsDimensionCandidateForPanel(
+                    dimension,
+                    panel,
+                    allWhiteChiguPolylines
+                ))
+                .Select(panel => new
+                {
+                    Dimension = dimension,
+                    Panel = panel,
+                    Direction = GetDimensionDirection(dimension),
+                    Score = GetDimensionPanelScore(
+                        dimension,
+                        panel.BasePolyline
+                    )
+                }))
+            .Where(candidate =>
+                candidate.Direction != DimensionDirection.Unknown
+            )
+            .OrderBy(candidate => candidate.Score)
+            .ThenBy(candidate => candidate.Dimension.Handle)
+            .ToList();
+
+        HashSet<string> assignedDimensionHandles = new(
+            StringComparer.OrdinalIgnoreCase
+        );
+
+        HashSet<string> occupiedPanelDirections = new(
+            StringComparer.OrdinalIgnoreCase
+        );
+
+        foreach (var candidate in candidates)
+        {
+            string directionKey =
+                $"{candidate.Panel.BasePolyline.Handle}:" +
+                $"{candidate.Direction}";
+
+            // 같은 치수는 하나의 패널에만 포함한다.
+            if (assignedDimensionHandles.Contains(
+                    candidate.Dimension.Handle) ||
+                occupiedPanelDirections.Contains(directionKey))
+            {
+                continue;
+            }
+
+            candidate.Panel.Entities.Add(candidate.Dimension);
+            assignedDimensionHandles.Add(candidate.Dimension.Handle);
+            occupiedPanelDirections.Add(directionKey);
+        }
+    }
+
+    private static bool IsDimensionCandidateForPanel(
+        EntityData dimension,
+        PanelGroup panel,
+        IReadOnlyList<EntityData> allWhiteChiguPolylines
+    )
+    {
+        if (!IsEntityInsideOrTouchingBounds(
+                dimension,
+                panel.SearchMinX,
+                panel.SearchMinY,
+                panel.SearchMaxX,
+                panel.SearchMaxY
+            ))
+        {
+            return false;
+        }
+
+        if (!IsVertex16PanelBase(panel.BasePolyline))
+        {
+            return true;
+        }
+
+        bool isIndependentVertex16Panel =
+            !allWhiteChiguPolylines.Any(other =>
+                !ReferenceEquals(panel.BasePolyline, other) &&
+                IsClosedFourVertexRectangle(other) &&
+                IsCompletelyInside(
+                    panel.BasePolyline,
+                    other,
+                    0.001
+                )
+            );
+
+        // 독립 16꼭짓점은 외곽 확장 범위 안의 치수를 사용할 수 있다.
+        // 다른 패널 안에 든 16꼭짓점은 자기 외곽 안의 치수만 사용한다.
+        return isIndependentVertex16Panel ||
+               IsCompletelyInside(
+                   dimension,
+                   panel.BasePolyline,
+                   0.001
+               );
+    }
+
+    private static double GetDimensionPanelScore(
+        EntityData dimension,
+        EntityData panelBase
+    )
+    {
+        double firstDistance = DistanceSquaredToPanelBounds(
+            dimension.FirstPointX,
+            dimension.FirstPointY,
+            panelBase
+        );
+
+        double secondDistance = DistanceSquaredToPanelBounds(
+            dimension.SecondPointX,
+            dimension.SecondPointY,
+            panelBase
+        );
+
+        double definitionDistance = DistanceSquaredToPanelBounds(
+            dimension.DefinitionPointX,
+            dimension.DefinitionPointY,
+            panelBase
+        );
+
+        return firstDistance +
+               secondDistance +
+               definitionDistance * 0.15;
+    }
+
+    private static double DistanceSquaredToPanelBounds(
+        double x,
+        double y,
+        EntityData panelBase
+    )
+    {
+        double dx = 0.0;
+        double dy = 0.0;
+
+        if (x < panelBase.MinX)
+        {
+            dx = panelBase.MinX - x;
+        }
+        else if (x > panelBase.MaxX)
+        {
+            dx = x - panelBase.MaxX;
+        }
+
+        if (y < panelBase.MinY)
+        {
+            dy = panelBase.MinY - y;
+        }
+        else if (y > panelBase.MaxY)
+        {
+            dy = y - panelBase.MaxY;
+        }
+
+        // 점이 패널 바깥이면 패널 외곽까지의 최단거리를 사용한다.
+        if (dx > 0.0 || dy > 0.0)
+        {
+            return dx * dx + dy * dy;
+        }
+
+        // 점이 패널 안에 있더라도 거리를 0으로 처리하지 않고
+        // 네 변 중 가장 가까운 외곽선까지의 거리로 비교한다.
+        // 내부 사각형과 외부 사각형이 겹쳐 인식될 때 실제 측정점이
+        // 놓인 패널을 선택하기 위한 처리다.
+        double edgeDistance = Math.Min(
+            Math.Min(
+                x - panelBase.MinX,
+                panelBase.MaxX - x
+            ),
+            Math.Min(
+                y - panelBase.MinY,
+                panelBase.MaxY - y
+            )
+        );
+
+        edgeDistance = Math.Max(0.0, edgeDistance);
+
+        return edgeDistance * edgeDistance;
+
     }
 
     private static double GetPanelAspectRatio(
@@ -1013,6 +1303,78 @@ internal static class Program_V2
             entity.ColorIndex == 7;
     }
 
+    private static bool IsWhiteChiguCircle(
+        EntityData entity
+    )
+    {
+        return
+            entity.Entity is Circle &&
+            string.Equals(
+                entity.LayerName,
+                "치구",
+                StringComparison.OrdinalIgnoreCase
+            ) &&
+            (entity.ColorIndex == 0 ||
+             entity.ColorIndex == 7);
+    }
+
+    private static bool IsEntityInsideCircle(
+        EntityData inner,
+        EntityData outerCircleData,
+        double tolerance = 0.001
+    )
+    {
+        if (outerCircleData.Entity is not Circle outerCircle)
+        {
+            return false;
+        }
+
+        double centerX;
+        double centerY;
+        double innerRadius = 0.0;
+
+        if (inner.Entity is Circle innerCircle)
+        {
+            centerX = innerCircle.Center.X;
+            centerY = innerCircle.Center.Y;
+            innerRadius = innerCircle.Radius;
+        }
+        else if (inner.HasBoundingBox)
+        {
+            centerX = (inner.MinX + inner.MaxX) / 2.0;
+            centerY = (inner.MinY + inner.MaxY) / 2.0;
+
+            double halfWidth = (inner.MaxX - inner.MinX) / 2.0;
+            double halfHeight = (inner.MaxY - inner.MinY) / 2.0;
+
+            // 사각 바운딩박스의 가장 먼 꼭짓점까지 포함되는지 검사한다.
+            innerRadius = Math.Sqrt(
+                halfWidth * halfWidth +
+                halfHeight * halfHeight
+            );
+        }
+        else
+        {
+            (double X, double Y)? point =
+                GetRepresentativePoint(inner);
+
+            if (!point.HasValue)
+            {
+                return false;
+            }
+
+            centerX = point.Value.X;
+            centerY = point.Value.Y;
+        }
+
+        double dx = centerX - outerCircle.Center.X;
+        double dy = centerY - outerCircle.Center.Y;
+        double centerDistance = Math.Sqrt(dx * dx + dy * dy);
+
+        return centerDistance + innerRadius <=
+               outerCircle.Radius + tolerance;
+    }
+
     /// <summary>
     /// 사각형 안에 중첩되어 있어도 독립 패널로 분리할 16꼭짓점 외곽인지 확인한다.
     /// </summary>
@@ -1100,8 +1462,10 @@ internal static class Program_V2
         );
 
         writer.WriteLine($"찾은 패널 수: {panelGroups.Count}");
-        writer.WriteLine("기준: Layer=치구, POLYLINE, ColorIndex=7(흰색)");
-        writer.WriteLine("포함 범위: 기준 폴리선 바운딩박스 사방 25");
+        writer.WriteLine(
+            "기준: 흰색 치구 POLYLINE 또는 내부에 볼트 구멍 원이 있는 흰색 치구 CIRCLE"
+        );
+        writer.WriteLine("포함 범위: 기준 외곽 바운딩박스 사방 30");
         writer.WriteLine();
 
         foreach (PanelGroup panel in panelGroups)
@@ -1892,6 +2256,13 @@ internal static class Program_V2
         // 모든 패널의 일반 크기 변경과 모서리 구멍 변경을 먼저 끝낸다.
         foreach (PanelGroup panel in panelGroups.OrderBy(x => x.Number))
         {
+            // 원형 패널 기준 원은 아래의 전용 계산식으로 수정한다.
+            // 폴리선 전용 ResizeSinglePanel에 넘기면 예외가 발생한다.
+            if (IsWhiteChiguCircle(panel.BasePolyline))
+            {
+                continue;
+            }
+
             double panelWidthDelta;
             double panelHeightDelta;
 
@@ -1925,9 +2296,9 @@ internal static class Program_V2
 
         }
 
-        // 원이 없고 사각형이 정확히 2개인 패널이 있으면,
-        // 두 사각형의 가로/세로 크기 차이를 재생성 여유값으로 사용한다.
-        // 재생성 크기 = 목표값 - 두 사각형 크기 차이 - 1.5
+        // 원이 없고 바깥 사각형 안에 닫힌 3~8꼭짓점 도형이 있으면,
+        // 두 도형의 가로/세로 크기 차이를 재생성 여유값으로 사용한다.
+        // 재생성 크기 = 목표값 - 두 도형 크기 차이 - 4.5 - 4.5 - 0.5
         // 해당 패널이 없으면 재생성 크기 = 목표값 - 21
         (double vertex16TargetWidth, double vertex16TargetHeight) =
             GetVertex16TargetSize(
@@ -1943,6 +2314,164 @@ internal static class Program_V2
             vertex16TargetWidth,
             vertex16TargetHeight
         );
+    }
+
+    /// <summary>
+    /// 흰색 치구 원 안에 볼트 구멍 레이어 원이 있는 경우를 찾는다.
+    /// 동심 볼트 원이 여러 개면 흰색 원 중심에 가장 가까운 원 하나만 연결한다.
+    /// </summary>
+    private static List<ChiguCircleBoltBinding>
+        FindChiguCircleBoltBindings(
+            IReadOnlyList<PanelGroup> panelGroups
+        )
+    {
+        List<PanelGroup> circlePanels = panelGroups
+            .Where(panel =>
+                IsWhiteChiguCircle(panel.BasePolyline))
+            .ToList();
+
+        List<ChiguCircleBoltBinding> result = new();
+
+        foreach (PanelGroup circlePanel in circlePanels)
+        {
+            EntityData chiguCircleData =
+                circlePanel.BasePolyline;
+
+            Circle chiguCircle = (Circle)chiguCircleData.Entity;
+
+            EntityData? boltHoleCircle = circlePanel.Entities
+                .Where(entity => entity.Entity is Circle)
+                .Where(entity => string.Equals(
+                    entity.LayerName,
+                    "볼트 구멍",
+                    StringComparison.OrdinalIgnoreCase
+                ))
+                .Where(entity =>
+                {
+                    Circle boltCircle = (Circle)entity.Entity;
+
+                    double dx =
+                        boltCircle.Center.X - chiguCircle.Center.X;
+
+                    double dy =
+                        boltCircle.Center.Y - chiguCircle.Center.Y;
+
+                    return dx * dx + dy * dy <=
+                           chiguCircle.Radius * chiguCircle.Radius +
+                           0.001;
+                })
+                .OrderBy(entity =>
+                {
+                    Circle boltCircle = (Circle)entity.Entity;
+
+                    double dx =
+                        boltCircle.Center.X - chiguCircle.Center.X;
+
+                    double dy =
+                        boltCircle.Center.Y - chiguCircle.Center.Y;
+
+                    return dx * dx + dy * dy;
+                })
+                .FirstOrDefault();
+
+            if (boltHoleCircle == null)
+            {
+                continue;
+            }
+
+            result.Add(new ChiguCircleBoltBinding
+            {
+                Panel = circlePanel,
+                ChiguCircle = chiguCircleData,
+                BoltHoleCircle = boltHoleCircle
+            });
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// 볼트 구멍 중심으로 기존 흰색 치구 원을 다시 만든다.
+    /// 원이 목표 가로·세로 중 작은 쪽을 넘지 않도록 작은 목표값을 사용한다.
+    /// 지름 = 목표값 - 18 - 18 - 0.5 - 10 - 10
+    /// </summary>
+    private static void ResizeChiguCirclesAroundBoltHoles(
+        IReadOnlyList<ChiguCircleBoltBinding> bindings,
+        double targetWidth,
+        double targetHeight
+    )
+    {
+        double targetValue = Math.Min(
+            targetWidth,
+            targetHeight
+        );
+
+        double targetDiameter =
+            targetValue -
+            18.0 -
+            18.0 -
+            0.5 -
+            10.0 -
+            10.0;
+
+        if (bindings.Count > 0 && targetDiameter <= 0.0)
+        {
+            throw new Exception(
+                "볼트 구멍 중심 치구 원의 목표 지름이 0 이하입니다. " +
+                $"Target={targetValue:0.###}, " +
+                $"Diameter={targetDiameter:0.###}"
+            );
+        }
+
+        foreach (ChiguCircleBoltBinding binding in bindings)
+        {
+            if (binding.ChiguCircle.Entity is not Circle chiguCircle ||
+                binding.BoltHoleCircle.Entity is not Circle boltCircle)
+            {
+                continue;
+            }
+
+            DimensionBounds oldBounds =
+                GetCurrentBounds(chiguCircle);
+
+            chiguCircle.Center = new XYZ(
+                boltCircle.Center.X,
+                boltCircle.Center.Y,
+                chiguCircle.Center.Z
+            );
+
+            chiguCircle.Radius = targetDiameter / 2.0;
+
+            DimensionBounds newBounds =
+                GetCurrentBounds(chiguCircle);
+
+            // 원형 패널에 포함된 가로/세로 치수도
+            // 원의 새 외곽에 맞춰 함께 수정한다.
+            foreach (DimensionAligned dimension in binding.Panel.Entities
+                .Select(entity => entity.Entity)
+                .OfType<DimensionAligned>()
+                .Distinct())
+            {
+                ResizeDimensionByBounds(
+                    dimension,
+                    oldBounds,
+                    newBounds
+                );
+            }
+
+            // 이후 저장 전 검사와 후속 처리에서 수정된 값을 사용하도록
+            // EntityData의 캐시 정보도 함께 갱신한다.
+            binding.ChiguCircle.CenterX = chiguCircle.Center.X;
+            binding.ChiguCircle.CenterY = chiguCircle.Center.Y;
+            binding.ChiguCircle.CenterZ = chiguCircle.Center.Z;
+            binding.ChiguCircle.Radius = chiguCircle.Radius;
+            binding.ChiguCircle.Diameter = targetDiameter;
+
+            ReadBoundingBox(
+                binding.ChiguCircle,
+                chiguCircle
+            );
+        }
     }
 
     private static void ResizeSinglePanel(
@@ -2064,7 +2593,7 @@ internal static class Program_V2
                 continue;
             }
 
-            if (IsInnerWhiteRectangle(panel, entity))
+            if (IsInnerWhitePolylineUpTo8Vertices(panel, entity))
             {
                 innerRectangleCount++;
                 ResizePolylineFromCenter(
@@ -2104,11 +2633,12 @@ internal static class Program_V2
     /// 조건에 맞는 기준 패널:
     /// - 원(CIRCLE)이 하나도 없음
     /// - 치수와 텍스트 개수는 무관
-    /// - 닫힌 4꼭짓점 사각형이 정확히 2개
+    /// - 바깥 기준은 닫힌 4꼭짓점 사각형
+    /// - 그 안에 완전히 포함된 닫힌 3~8꼭짓점 폴리선이 하나 이상 있음
     ///
     /// 기준 패널이 있으면:
-    /// X = 목표 X - 두 사각형 가로 크기 차이 - 1.5
-    /// Y = 목표 Y - 두 사각형 세로 크기 차이 - 1.5
+    /// X = 목표 X - 바깥/안쪽 도형 가로 크기 차이 - 4.5 - 4.5 - 0.5
+    /// Y = 목표 Y - 바깥/안쪽 도형 세로 크기 차이 - 4.5 - 4.5 - 0.5
     ///
     /// 기준 패널이 없으면:
     /// X = 목표 X - 21
@@ -2123,31 +2653,56 @@ internal static class Program_V2
         foreach (PanelGroup panel in panelGroups
             .Where(panel => !panel.IsThicknessPanel))
         {
+            if (!IsClosedFourVertexRectangle(panel.BasePolyline))
+            {
+                continue;
+            }
+
+            // 16꼭짓점 크기 기준 패널의 일반 원 존재 여부만 확인한다.
+            // 볼트 구멍 원은 패널 구성원으로 유지하되 이 검사에서는 제외한다.
             bool hasCircle = panel.Entities
-                .Any(entity => entity.Entity is Circle);
+                .Any(entity =>
+                    entity.Entity is Circle &&
+                    !string.Equals(
+                        entity.LayerName,
+                        "볼트 구멍",
+                        StringComparison.OrdinalIgnoreCase
+                    )
+                );
 
             if (hasCircle)
             {
                 continue;
             }
 
-            List<EntityData> rectangles = panel.Entities
-                .Where(IsClosedFourVertexRectangle)
+            EntityData? innerPolyline = panel.Entities
+                .Where(entity =>
+                    !ReferenceEquals(entity, panel.BasePolyline))
+                .Where(IsClosedPolylineWithAtMost8Vertices)
+                .Where(entity => IsCompletelyInside(
+                    entity,
+                    panel.BasePolyline,
+                    0.001
+                ))
                 .GroupBy(entity => entity.Handle)
                 .Select(group => group.First())
-                .ToList();
+                // 안쪽 후보가 여러 개면 바깥 사각형과 대응되는
+                // 가장 큰 안쪽 도형을 기준으로 사용한다.
+                .OrderByDescending(entity =>
+                    entity.Width * entity.Height
+                )
+                .FirstOrDefault();
 
-            if (rectangles.Count != 2)
+            if (innerPolyline == null)
             {
                 continue;
             }
 
-
             DimensionBounds firstBounds =
-                GetCurrentBounds(rectangles[0].Entity);
+                GetCurrentBounds(panel.BasePolyline.Entity);
 
             DimensionBounds secondBounds =
-                GetCurrentBounds(rectangles[1].Entity);
+                GetCurrentBounds(innerPolyline.Entity);
 
             double firstWidth =
                 firstBounds.MaxX - firstBounds.MinX;
@@ -2168,10 +2723,10 @@ internal static class Program_V2
                 Math.Abs(firstHeight - secondHeight);
 
             double calculatedWidth =
-                targetWidth - widthDifference - 8.7;
+                targetWidth - widthDifference - 4.5-4.5-0.5;
 
             double calculatedHeight =
-                targetHeight - heightDifference - 8.7;
+                targetHeight - heightDifference - 4.5-4.5-0.5;
 
 
             if (calculatedWidth <= 0.0 ||
@@ -2181,7 +2736,7 @@ internal static class Program_V2
                     "16꼭짓점 패널 기준 크기 계산 결과가 0 이하입니다. " +
                     $"Panel={panel.BasePolyline.Handle}, " +
                     $"Target={targetWidth}x{targetHeight}, " +
-                    $"RectangleDifference={widthDifference}x{heightDifference}, " +
+                    $"ShapeDifference={widthDifference}x{heightDifference}, " +
                     $"Calculated={calculatedWidth}x{calculatedHeight}"
                 );
             }
@@ -2192,8 +2747,8 @@ internal static class Program_V2
             );
         }
 
-        double fallbackWidth = targetWidth - 44.7;
-        double fallbackHeight = targetHeight - 44.7;
+        double fallbackWidth = targetWidth - 18-18-4.5-4.5-0.5;
+        double fallbackHeight = targetHeight - 18-18-4.5-4.5-0.5;
 
 
         if (fallbackWidth <= 0.0 ||
@@ -2225,6 +2780,26 @@ internal static class Program_V2
             Polyline2D polyline =>
                 polyline.IsClosed &&
                 polyline.Vertices.Count == 4,
+
+            _ => false
+        };
+    }
+
+    private static bool IsClosedPolylineWithAtMost8Vertices(
+        EntityData entity
+    )
+    {
+        return entity.Entity switch
+        {
+            LwPolyline polyline =>
+                polyline.IsClosed &&
+                polyline.Vertices.Count >= 3 &&
+                polyline.Vertices.Count <= 8,
+
+            Polyline2D polyline =>
+                polyline.IsClosed &&
+                polyline.Vertices.Count >= 3 &&
+                polyline.Vertices.Count <= 8,
 
             _ => false
         };
@@ -2332,7 +2907,7 @@ internal static class Program_V2
             return;
         }
 
-        double smallRadius = holeRadius - 4.0;
+        double smallRadius = holeRadius - 4.5;
         double cornerLength =
             holeRadius + smallRadius * 2.0;
 
@@ -2361,12 +2936,17 @@ internal static class Program_V2
         if (targetWidth <= cornerLength * 2.0 ||
             targetHeight <= cornerLength * 2.0)
         {
-            throw new Exception(
-                $"16꼭짓점 패널을 다시 만들 공간이 부족합니다. " +
-                $"Panel={oldPanelData.Handle}, " +
-                $"Target={targetWidth}x{targetHeight}, " +
-                $"CornerLength={cornerLength}"
+            MessageBox.Show(
+                "16꼭짓점 패널을 수정할 공간이 부족하여\n" +
+                "해당 패널은 수정하지 않고 계속 진행합니다.",
+                "16꼭짓점 패널 경고",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning
             );
+
+            // 경고 확인 후 해당 패널만 기존 형상으로 유지하고
+            // 나머지 수정, 재배치 및 DWG 저장은 계속 진행한다.
+            return;
         }
 
         double centerX =
@@ -2556,6 +3136,27 @@ internal static class Program_V2
         // 너무 작아져 0이 되는 경우를 막는다.
         newRadius = Math.Max(5.0, newRadius);
 
+        double newDiameter = newRadius * 2.0;
+
+        // 평균 배율로 계산하고 반올림한 구멍의 지름(2R)보다
+        // 목표 가로 또는 세로가 작으면, 더 짧은 목표 변의 배율만 사용해
+        // 구멍 반지름을 다시 계산한다.
+        if (targetWidth < newDiameter ||
+            targetHeight < newDiameter)
+        {
+            double shorterSideScale =
+                targetWidth <= targetHeight
+                    ? widthScale
+                    : heightScale;
+
+            newRadius = radiusStep * Math.Round(
+                oldRadius * shorterSideScale / radiusStep,
+                MidpointRounding.AwayFromZero
+            );
+
+            newRadius = Math.Max(5.0, newRadius);
+        }
+
         double radiusDifference = newRadius - oldRadius;
         double moveX = 0.0;
         double moveY = 0.0;
@@ -2705,7 +3306,7 @@ internal static class Program_V2
             entity.CenterBoxY <= panel.BasePolyline.MaxY + panel.SearchMargin + tolerance;
     }
 
-    private static bool IsInnerWhiteRectangle(
+    private static bool IsInnerWhitePolylineUpTo8Vertices(
         PanelGroup panel,
         EntityData entity
     )
@@ -2723,12 +3324,7 @@ internal static class Program_V2
             return false;
         }
 
-        if (entity.Entity is not LwPolyline polyline)
-        {
-            return false;
-        }
-
-        if (!polyline.IsClosed || polyline.Vertices.Count != 4)
+        if (!IsClosedPolylineWithAtMost8Vertices(entity))
         {
             return false;
         }
@@ -2738,14 +3334,13 @@ internal static class Program_V2
             return false;
         }
 
-        // 실제 외곽 범위가 기준 패널 안에 완전히 들어간 경우만 내부 사각형으로 본다.
-        const double tolerance = 0.001;
-
-        return
-            entity.MinX >= panel.BasePolyline.MinX - tolerance &&
-            entity.MaxX <= panel.BasePolyline.MaxX + tolerance &&
-            entity.MinY >= panel.BasePolyline.MinY - tolerance &&
-            entity.MaxY <= panel.BasePolyline.MaxY + tolerance;
+        // 닫힌 3~8꼭짓점 폴리선의 실제 외곽이
+        // 바깥 기준 사각형 안에 완전히 들어간 경우만 내부 도형으로 본다.
+        return IsCompletelyInside(
+            entity,
+            panel.BasePolyline,
+            0.001
+        );
     }
 
     private static void ResizePolylineFromCenter(
@@ -3028,6 +3623,7 @@ internal static class Program_V2
 
             List<HoleCircleGroup> normalHoles = BuildHoleCircleGroups(
                 circles.Where(entity =>
+                    !ReferenceEquals(entity, panel.BasePolyline) &&
                     !string.Equals(
                         entity.LayerName,
                         "볼트 구멍",
@@ -3396,7 +3992,8 @@ internal static class Program_V2
     }
 
     /// <summary>
-    /// 바깥 사각형과 내부 사각형을 함께 가진 패널 안에 완전히 들어 있는
+    /// 바깥 사각형과 내부의 닫힌 3~8꼭짓점 폴리선을 함께 가진 패널 안에
+    /// 완전히 들어 있는
     /// 독립 16꼭짓점 패널을 찾아 원래 바깥 패널에 연결한다.
     /// 연결된 16꼭짓점 패널은 재정렬 시 독립적으로 밖으로 빠지지 않고
     /// 바깥 패널과 같은 거리만큼 이동한다.
@@ -3418,7 +4015,7 @@ internal static class Program_V2
                 IsClosedFourVertexRectangle(panel.BasePolyline) &&
                 panel.Entities.Any(entity =>
                     !ReferenceEquals(entity, panel.BasePolyline) &&
-                    IsClosedFourVertexRectangle(entity) &&
+                    IsClosedPolylineWithAtMost8Vertices(entity) &&
                     IsCompletelyInside(
                         entity,
                         panel.BasePolyline,
@@ -4147,6 +4744,13 @@ internal static class Program_V2
         public bool IsThicknessPanel { get; set; }
         public ThicknessPanelDirection ThicknessDirection { get; set; }
         public double AspectRatio { get; set; }
+    }
+
+    internal sealed class ChiguCircleBoltBinding
+    {
+        public required PanelGroup Panel { get; init; }
+        public required EntityData ChiguCircle { get; init; }
+        public required EntityData BoltHoleCircle { get; init; }
     }
 
     internal enum DimensionDirection
