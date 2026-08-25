@@ -1298,9 +1298,14 @@ internal static class Program_V2
             entity.ObjectName == "POLYLINE2D";
 
         return
-            entity.LayerName == "치구" &&
+            string.Equals(
+                entity.LayerName,
+                "치구",
+                StringComparison.OrdinalIgnoreCase
+            ) &&
             isPolyline &&
-            entity.ColorIndex == 7;
+            (entity.ColorIndex == 0 ||
+             entity.ColorIndex == 7);
     }
 
     private static bool IsWhiteChiguCircle(
@@ -1377,6 +1382,7 @@ internal static class Program_V2
 
     /// <summary>
     /// 사각형 안에 중첩되어 있어도 독립 패널로 분리할 16꼭짓점 외곽인지 확인한다.
+    /// 치구 레이어의 ACI 0/7 닫힌 LWPOLYLINE과 POLYLINE2D를 모두 허용한다.
     /// </summary>
     private static bool IsVertex16PanelBase(
         EntityData entity
@@ -1384,7 +1390,6 @@ internal static class Program_V2
     {
         return
             IsWhiteChiguPolyline(entity) &&
-            entity.ObjectName == "LWPOLYLINE" &&
             entity.IsClosed &&
             entity.Vertices.Count == 16;
     }
@@ -2566,29 +2571,53 @@ internal static class Program_V2
                 continue;
             }
 
-            // 상·하 가로형 두께 패널 안의 빨간 사각형은
-            // 단순 이동만 하지 않고 두께 변화량만큼 세로 크기도 변경한다.
-            // 가로 방향은 패널 폭 변화에 맞춰 좌우로 이동한다.
-            if (IsHorizontalThicknessPanelRedBlock(panel, entity))
+            // 두께 패널 안의 빨간 사각형은 판 방향에 맞춰 처리한다.
+            // 가로형: 빨간 박스의 세로 크기를 두께 변화량만큼 변경하고 X축으로 이동한다.
+            // 세로형: 빨간 박스의 가로 크기를 두께 변화량만큼 변경하고 Y축으로 이동한다.
+            if (IsThicknessPanelRedBlock(panel, entity))
             {
                 redBlockCount++;
-                ResizePolylineFromCenter(
-                    entity,
-                    0.0,
-                    heightDelta
-                );
 
-                double redBlockMoveX = GetDirectionalMove(
-                    entity.CenterBoxX,
-                    basePolyline.CenterBoxX,
-                    widthDelta
-                );
+                if (panel.ThicknessDirection == ThicknessPanelDirection.Horizontal)
+                {
+                    ResizePolylineFromCenter(
+                        entity,
+                        0.0,
+                        heightDelta
+                    );
 
-                MoveEntity(
-                    entity.Entity,
-                    redBlockMoveX,
-                    0.0
-                );
+                    double redBlockMoveX = GetDirectionalMove(
+                        entity.CenterBoxX,
+                        basePolyline.CenterBoxX,
+                        widthDelta
+                    );
+
+                    MoveEntity(
+                        entity.Entity,
+                        redBlockMoveX,
+                        0.0
+                    );
+                }
+                else
+                {
+                    ResizePolylineFromCenter(
+                        entity,
+                        widthDelta,
+                        0.0
+                    );
+
+                    double redBlockMoveY = GetDirectionalMove(
+                        entity.CenterBoxY,
+                        basePolyline.CenterBoxY,
+                        heightDelta
+                    );
+
+                    MoveEntity(
+                        entity.Entity,
+                        0.0,
+                        redBlockMoveY
+                    );
+                }
 
                 continue;
             }
@@ -3249,20 +3278,16 @@ internal static class Program_V2
     }
 
     /// <summary>
-    /// 패널 기준 폴리선 안쪽에 있는 흰색 닫힌 사각형인지 확인한다.
-    /// 기준 폴리선 자기 자신과 볼트 구멍 레이어는 제외한다.
-    /// </summary>
-    /// <summary>
-    /// 상·하 가로형 두께 패널 내부의 빨간 닫힌 사각형인지 확인한다.
+    /// 가로형 또는 세로형 두께 패널 내부의 빨간 닫힌 사각형인지 확인한다.
     /// 빨간색은 ACI 1 기준이며, 기준 두께 패널 자신과 볼트 구멍은 제외한다.
     /// </summary>
-    private static bool IsHorizontalThicknessPanelRedBlock(
+    private static bool IsThicknessPanelRedBlock(
         PanelGroup panel,
         EntityData entity
     )
     {
         if (!panel.IsThicknessPanel ||
-            panel.ThicknessDirection != ThicknessPanelDirection.Horizontal)
+            panel.ThicknessDirection == ThicknessPanelDirection.None)
         {
             return false;
         }
@@ -3298,12 +3323,21 @@ internal static class Program_V2
 
         const double tolerance = 0.001;
 
-        // 빨간 박스 중심이 두께 패널의 기존 검색 범위 안에 있어야 한다.
+        // 가로형은 좌우 끝 박스, 세로형은 상하 끝 박스를 대상으로 한다.
+        if (panel.ThicknessDirection == ThicknessPanelDirection.Horizontal)
+        {
+            return
+                entity.CenterBoxX >= panel.BasePolyline.MinX - tolerance &&
+                entity.CenterBoxX <= panel.BasePolyline.MaxX + tolerance &&
+                entity.CenterBoxY >= panel.BasePolyline.MinY - panel.SearchMargin - tolerance &&
+                entity.CenterBoxY <= panel.BasePolyline.MaxY + panel.SearchMargin + tolerance;
+        }
+
         return
-            entity.CenterBoxX >= panel.BasePolyline.MinX - tolerance &&
-            entity.CenterBoxX <= panel.BasePolyline.MaxX + tolerance &&
-            entity.CenterBoxY >= panel.BasePolyline.MinY - panel.SearchMargin - tolerance &&
-            entity.CenterBoxY <= panel.BasePolyline.MaxY + panel.SearchMargin + tolerance;
+            entity.CenterBoxX >= panel.BasePolyline.MinX - panel.SearchMargin - tolerance &&
+            entity.CenterBoxX <= panel.BasePolyline.MaxX + panel.SearchMargin + tolerance &&
+            entity.CenterBoxY >= panel.BasePolyline.MinY - tolerance &&
+            entity.CenterBoxY <= panel.BasePolyline.MaxY + tolerance;
     }
 
     private static bool IsInnerWhitePolylineUpTo8Vertices(
@@ -3329,7 +3363,8 @@ internal static class Program_V2
             return false;
         }
 
-        if (entity.ColorIndex != 7)
+        if (entity.ColorIndex != 0 &&
+            entity.ColorIndex != 7)
         {
             return false;
         }
