@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Globalization;
@@ -31,6 +32,240 @@ internal static class Program_V2
     [STAThread]
     private static void Main()
     {
+        ApplicationConfiguration.Initialize();
+
+        ResizeMainForm mainForm = new()
+        {
+            AnalyzeDwgFile = AnalyzeDwgFileForUi,
+            ConvertDwgFile = ConvertDwgFileFromUi
+        };
+
+        // EXE에 설정된 ApplicationIcon을 실행 중인 메인 창에도 적용한다.
+        // 따라서 작업 표시줄과 창 왼쪽 위 아이콘도 EXE 아이콘과 동일해진다.
+        using Icon? applicationIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
+        if (applicationIcon != null)
+        {
+            mainForm.Icon = (Icon)applicationIcon.Clone();
+        }
+
+        Application.Run(mainForm);
+    }
+
+    /// <summary>
+    /// UI 파일 목록에 표시할 현재 치수만 읽는다.
+    /// 이 단계에서는 도면을 수정하거나 새 DWG를 저장하지 않는다.
+    /// </summary>
+    private static DwgFileSizeSnapshot AnalyzeDwgFileForUi(
+        string dwgPath
+    )
+    {
+        var context = LoadDwgProcessingContext(
+            dwgPath,
+            false
+        );
+
+        return new DwgFileSizeSnapshot
+        {
+            FilePath = dwgPath,
+            Width = context.CurrentValues.Width,
+            Height = context.CurrentValues.Height,
+            Thickness = context.CurrentValues.Thickness
+        };
+    }
+
+    /// <summary>
+    /// UI에서 전달한 파일 하나와 목표 치수로 기존 수정 과정을 실행한다.
+    /// </summary>
+    private static string ConvertDwgFileFromUi(
+        DwgConversionRequest request
+    )
+    {
+        var context = LoadDwgProcessingContext(
+            request.InputPath,
+            true
+        );
+
+        CadDocument document = context.Document;
+        DrawingData drawingData = context.DrawingData;
+        List<PanelGroup> panelGroups = context.PanelGroups;
+        Dictionary<PanelGroup, List<PanelGroup>>
+            originalNestedVertex16Bindings = context.NestedVertex16Bindings;
+        CurrentDimensionValues currentValues = context.CurrentValues;
+
+        ResizeInput resizeInput = new()
+        {
+            TargetWidth = request.TargetWidth,
+            TargetHeight = request.TargetHeight,
+            TargetThickness = request.TargetThickness
+        };
+
+        double effectiveTargetThickness =
+            resizeInput.TargetThickness ??
+            currentValues.Thickness ??
+            double.PositiveInfinity;
+
+        if (effectiveTargetThickness <= 36.0)
+        {
+            RemoveThicknessPanelGroups(
+                drawingData,
+                panelGroups
+            );
+        }
+
+        SelectBoltHolePairsByTargetWidth(
+            drawingData,
+            panelGroups,
+            resizeInput.TargetWidth
+        );
+
+        List<ChiguCircleBoltBinding> chiguCircleBoltBindings =
+            FindChiguCircleBoltBindings(panelGroups);
+
+        ApplyPanelResize(
+            drawingData,
+            panelGroups,
+            currentValues,
+            resizeInput
+        );
+
+        ResizeChiguCirclesAroundBoltHoles(
+            chiguCircleBoltBindings,
+            resizeInput.TargetWidth,
+            resizeInput.TargetHeight
+        );
+
+        ArrangePanelGroupsWithGap(
+            panelGroups,
+            50.0,
+            originalNestedVertex16Bindings
+        );
+
+        ResizeChiguCirclesAroundBoltHoles(
+            chiguCircleBoltBindings,
+            resizeInput.TargetWidth,
+            resizeInput.TargetHeight
+        );
+
+        ShowBoltHoleClearanceWarnings(
+            panelGroups,
+            3.9
+        );
+
+        string outputDirectory = request.OutputDirectory;
+
+        if (string.IsNullOrWhiteSpace(outputDirectory))
+        {
+            outputDirectory =
+                Path.GetDirectoryName(request.InputPath)
+                ?? throw new Exception("입력 DWG 파일의 폴더를 찾지 못했습니다.");
+        }
+
+        Directory.CreateDirectory(outputDirectory);
+
+        string fileName =
+            Path.GetFileNameWithoutExtension(request.InputPath);
+
+        string outputPath = Path.Combine(
+            outputDirectory,
+            $"{fileName}_{resizeInput.TargetWidth:0.###}x" +
+            $"{resizeInput.TargetHeight:0.###}" +
+            (resizeInput.TargetThickness.HasValue
+                ? $"x{resizeInput.TargetThickness.Value:0.###}"
+                : string.Empty) +
+            "_v2.dwg"
+        );
+
+        SaveAsNewDwg(
+            document,
+            outputPath
+        );
+
+        return outputPath;
+    }
+
+    private static (
+        CadDocument Document,
+        DrawingData DrawingData,
+        List<PanelGroup> PanelGroups,
+        Dictionary<PanelGroup, List<PanelGroup>> NestedVertex16Bindings,
+        CurrentDimensionValues CurrentValues
+    ) LoadDwgProcessingContext(
+        string dwgPath,
+        bool saveReports
+    )
+    {
+        if (string.IsNullOrWhiteSpace(dwgPath) ||
+            !File.Exists(dwgPath))
+        {
+            throw new FileNotFoundException(
+                "처리할 DWG 파일을 찾지 못했습니다.",
+                dwgPath
+            );
+        }
+
+        CadDocument document = DwgReader.Read(dwgPath);
+        DrawingData drawingData = ReadDrawingData(document);
+
+        List<PanelGroup> panelGroups = FindPanelGroups(
+            drawingData,
+            30.0
+        );
+
+        ClassifyThicknessPanels(panelGroups);
+
+        Dictionary<PanelGroup, List<PanelGroup>>
+            originalNestedVertex16Bindings =
+                BindNestedVertex16Panels(
+                    panelGroups
+                        .Where(panel => !panel.IsThicknessPanel)
+                        .ToList()
+                );
+
+        if (saveReports)
+        {
+            // TXT 보고서 출력 비활성화
+            // string directory =
+            //     Path.GetDirectoryName(dwgPath)
+            //     ?? throw new Exception("선택한 DWG 파일의 폴더를 찾지 못했습니다.");
+
+            // string fileName =
+            //     Path.GetFileNameWithoutExtension(dwgPath);
+
+            // SaveEntityReport(
+            //     drawingData,
+            //     Path.Combine(
+            //         directory,
+            //         $"{fileName}_objects_v2.txt"
+            //     )
+            // );
+
+            // SavePanelGroupReport(
+            //     panelGroups,
+            //     Path.Combine(
+            //         directory,
+            //         $"{fileName}_panels_v2.txt"
+            //     )
+            // );
+        }
+
+        CurrentDimensionValues currentValues =
+            ReadCurrentDimensionValues(panelGroups);
+
+        return (
+            document,
+            drawingData,
+            panelGroups,
+            originalNestedVertex16Bindings,
+            currentValues
+        );
+    }
+
+    /*
+     * 이전 단일 파일 선택/입력창 기반 Main 흐름은 UI 일괄 처리 방식으로 교체했다.
+     * 실제 도면 수정 규칙은 ConvertDwgFileFromUi에서 동일한 순서로 호출한다.
+     */
+    private static void LegacySingleFileMainRemoved()
+    {
         try
         {
             string? dwgPath = SelectDwgFile();
@@ -52,15 +287,15 @@ internal static class Program_V2
                 Path.GetFileNameWithoutExtension(dwgPath);
 
             //도형 위치 출력 txt 파일
-            string reportPath = Path.Combine(
-                directory,
-                $"{fileName}_objects_v2.txt"
-            );
+            // string reportPath = Path.Combine(
+            //     directory,
+            //     $"{fileName}_objects_v2.txt"
+            // );
 
-            SaveEntityReport(
-                drawingData,
-                reportPath
-            );
+            // SaveEntityReport(
+            //     drawingData,
+            //     reportPath
+            // );
 
             // 패널 기준 객체:
             // Layer="치구", POLYLINE 계열, 실제 표시 색상=흰색(ACI 7)
@@ -90,15 +325,15 @@ internal static class Program_V2
                     );
 
             //패널안의 객체 출력 txt 파일
-            string panelReportPath = Path.Combine(
-                directory,
-                $"{fileName}_panels_v2.txt"
-            );
+            // string panelReportPath = Path.Combine(
+            //     directory,
+            //     $"{fileName}_panels_v2.txt"
+            // );
 
-            SavePanelGroupReport(
-                panelGroups,
-                panelReportPath
-            );
+            // SavePanelGroupReport(
+            //     panelGroups,
+            //     panelReportPath
+            // );
 
             // 수정 UI에 표시할 현재값은 폴리선 크기가 아니라 DWG 치수값으로 읽는다.
             // X/Y는 일반 패널 중 면적이 가장 큰 사각형 패널의 가로/세로 치수,
@@ -1515,56 +1750,55 @@ internal static class Program_V2
 
 
     /// <summary>
-    /// 일반 패널 중 면적이 가장 큰 닫힌 사각형 패널을 기준으로 X/Y 치수를 읽고,
+    /// 일반 패널 중 가로·세로 치수를 모두 가진 가장 큰 닫힌 패널을 기준으로 읽고,
     /// 두께 패널이 존재하면 그 패널의 짧은 방향 치수를 두께값으로 읽는다.
     /// </summary>
     private static CurrentDimensionValues ReadCurrentDimensionValues(
         IReadOnlyList<PanelGroup> panelGroups
     )
     {
-        PanelGroup? sourcePanel = panelGroups
+        var sourceCandidate = panelGroups
             .Where(x => !x.IsThicknessPanel)
             .Where(x => x.BasePolyline.IsClosed)
-            .Where(x => x.BasePolyline.Vertices.Count == 4)
-            .OrderByDescending(x =>
-                x.BasePolyline.Width * x.BasePolyline.Height
+            .Select(panel => new
+            {
+                Panel = panel,
+                Dimensions = GetPanelDimensionValues(panel)
+            })
+            .Select(candidate => new
+            {
+                candidate.Panel,
+                WidthDimension = candidate.Dimensions
+                    .Where(x => x.Direction == DimensionDirection.Horizontal)
+                    .OrderByDescending(x => x.Value)
+                    .FirstOrDefault(),
+                HeightDimension = candidate.Dimensions
+                    .Where(x => x.Direction == DimensionDirection.Vertical)
+                    .OrderByDescending(x => x.Value)
+                    .FirstOrDefault()
+            })
+            .Where(candidate =>
+                candidate.WidthDimension != null &&
+                candidate.HeightDimension != null
+            )
+            .OrderByDescending(candidate =>
+                candidate.Panel.BasePolyline.Width *
+                candidate.Panel.BasePolyline.Height
             )
             .FirstOrDefault();
 
-        if (sourcePanel == null)
+        if (sourceCandidate == null)
         {
             throw new Exception(
-                "가로·세로 현재값을 읽을 가장 큰 사각형 패널을 찾지 못했습니다."
+                "가로·세로 치수를 모두 포함한 기준 패널을 찾지 못했습니다."
             );
         }
 
-
-        List<DimensionValueInfo> sourceDimensions =
-            GetPanelDimensionValues(sourcePanel);
-
-        DimensionValueInfo? widthDimension = sourceDimensions
-            .Where(x => x.Direction == DimensionDirection.Horizontal)
-            .OrderByDescending(x => x.Value)
-            .FirstOrDefault();
-
-        DimensionValueInfo? heightDimension = sourceDimensions
-            .Where(x => x.Direction == DimensionDirection.Vertical)
-            .OrderByDescending(x => x.Value)
-            .FirstOrDefault();
-
-        if (widthDimension == null)
-        {
-            throw new Exception(
-                $"{sourcePanel.Number}번 기준 패널에서 가로 치수값을 찾지 못했습니다."
-            );
-        }
-
-        if (heightDimension == null)
-        {
-            throw new Exception(
-                $"{sourcePanel.Number}번 기준 패널에서 세로 치수값을 찾지 못했습니다."
-            );
-        }
+        PanelGroup sourcePanel = sourceCandidate.Panel;
+        DimensionValueInfo widthDimension =
+            sourceCandidate.WidthDimension!;
+        DimensionValueInfo heightDimension =
+            sourceCandidate.HeightDimension!;
 
 
         double? thickness = null;
@@ -3184,6 +3418,13 @@ internal static class Program_V2
             );
 
             newRadius = Math.Max(5.0, newRadius);
+        }
+
+        // 계산된 모서리 구멍 반지름이 20이면 최종값을 19.5로 보정한다.
+        // 아래 중심 이동 계산도 보정된 19.5를 기준으로 처리된다.
+        if (Math.Abs(newRadius - 20.0) <= 0.000001)
+        {
+            newRadius = 19.5;
         }
 
         double radiusDifference = newRadius - oldRadius;
