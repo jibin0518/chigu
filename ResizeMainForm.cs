@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Drawing;
 using System.Globalization;
 using System.IO;
@@ -31,8 +32,8 @@ internal sealed class ResizeMainForm : Form
 
     public TextBox InputPathTextBox { get; }
     public Button InputPathBrowseButton { get; }
-    public TextBox DwgPathTextBox { get; }
-    public Button DwgPathBrowseButton { get; }
+    public TextBox InputFileSearchTextBox { get; }
+    public Button RefreshInputFilesButton { get; }
     public TextBox OutputPathTextBox { get; }
     public Button OutputPathBrowseButton { get; }
     public CheckBox AutoOutputPathCheckBox { get; }
@@ -51,6 +52,7 @@ internal sealed class ResizeMainForm : Form
 
     public DataGridView InputFilesGrid { get; }
     public DataGridView TargetFilesGrid { get; }
+    public Button AddFolderButton { get; }
     public Button AddFilesButton { get; }
     public Button MoveSelectedButton { get; }
     public Button SaveCurrentStateButton { get; }
@@ -81,6 +83,16 @@ internal sealed class ResizeMainForm : Form
     public ResizeMainForm()
     {
         Text = "DWG 자동 크기 수정";
+        System.Drawing.Icon? executableIcon =
+            System.Drawing.Icon.ExtractAssociatedIcon(
+                Application.ExecutablePath
+            );
+
+        if (executableIcon != null)
+        {
+            Icon = executableIcon;
+        }
+
         StartPosition = FormStartPosition.CenterScreen;
         MinimumSize = new Size(1100, 700);
         ClientSize = new Size(1280, 760);
@@ -103,7 +115,7 @@ internal sealed class ResizeMainForm : Form
         Panel leftCard = CreateCard();
         Panel rightCard = CreateCard();
 
-        TableLayoutPanel leftLayout = CreateSectionLayout(172F);
+        TableLayoutPanel leftLayout = CreateSectionLayout(86F);
         TableLayoutPanel rightLayout = CreateSectionLayout(86F);
 
         Label inputTitle = CreateSectionTitle("입력 파일");
@@ -117,18 +129,33 @@ internal sealed class ResizeMainForm : Form
         InputPathTextBox = inputPath;
         InputPathBrowseButton = inputBrowse;
 
-        Panel dwgPathPanel = CreatePathPanel(
-            "DWG 경로",
-            out TextBox dwgPath,
-            out Button dwgBrowse
-        );
-        DwgPathTextBox = dwgPath;
-        DwgPathBrowseButton = dwgBrowse;
+        InputFileSearchTextBox = new TextBox
+        {
+            Dock = DockStyle.Fill,
+            BorderStyle = BorderStyle.FixedSingle,
+            PlaceholderText = "파일명 검색",
+            // 제목 글자보다 아래로 처져 보이지 않도록 위 여백을 없애고,
+            // 아래 테두리가 다음 행에 붙지 않도록 아래 여백을 확보한다.
+            Margin = new Padding(8, 0, 8, 7)
+        };
 
-        Panel inputPathsPanel = CreateStackedPathPanel(
-            inputPathPanel,
-            dwgPathPanel
-        );
+        RefreshInputFilesButton = new Button
+        {
+            Text = "새로고침",
+            Dock = DockStyle.Fill,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(238, 242, 247),
+            ForeColor = Color.FromArgb(31, 73, 135),
+            Font = new Font(
+                "Segoe UI",
+                9F,
+                FontStyle.Bold,
+                GraphicsUnit.Point
+            ),
+            Cursor = Cursors.Hand,
+            Margin = new Padding(8, 0, 0, 7)
+        };
+        RefreshInputFilesButton.FlatAppearance.BorderColor = BorderColor;
 
         Panel outputPathPanel = CreateOutputPathPanel(
             out TextBox outputPath,
@@ -174,10 +201,23 @@ internal sealed class ResizeMainForm : Form
             "목표 두께",
             false
         );
+        TargetFilesGrid.Columns.Add(
+            CreateGridColumn(
+                "ModifiedTime",
+                "수정 시간",
+                125F,
+                true
+            )
+        );
 
+        // 결과 목록은 숫자/시간 열을 필요한 크기로 고정하고,
+        // 남은 공간을 파일명 열이 전부 사용하게 한다.
+        // FillWeight만 조정하면 전체 열이 다시 압축되어 긴 파일명이
+        // 계속 잘리므로 오른쪽 목록에만 고정 폭을 적용한다.
+        ConfigureTargetFileGridColumns(TargetFilesGrid);
+
+        AddFolderButton = CreatePrimaryButton("목록 DWG 폴더 추가");
         AddFilesButton = CreatePrimaryButton("＋ DWG 추가");
-        AddFilesButton.Dock = DockStyle.Right;
-        AddFilesButton.Width = 165;
 
         MoveSelectedButton = new Button
         {
@@ -219,18 +259,24 @@ internal sealed class ResizeMainForm : Form
             "파일 목록",
             "추가된 DWG 파일과 읽어 온 현재 치수를 표시합니다.",
             InputFilesGrid,
-            AddFilesButton
+            AddFolderButton,
+            AddFilesButton,
+            InputFileSearchTextBox,
+            RefreshInputFilesButton
         );
 
         Panel targetGridPanel = CreateGridPanel(
             "수정된 파일 목록",
             "변환에 성공해 생성된 DWG 파일과 적용된 목표 사이즈입니다.",
             TargetFilesGrid,
+            null,
+            null,
+            null,
             null
         );
 
         leftLayout.Controls.Add(inputTitle, 0, 0);
-        leftLayout.Controls.Add(inputPathsPanel, 0, 1);
+        leftLayout.Controls.Add(inputPathPanel, 0, 1);
         leftLayout.Controls.Add(currentSizePanel, 0, 2);
         leftLayout.Controls.Add(inputGridPanel, 0, 3);
 
@@ -249,21 +295,27 @@ internal sealed class ResizeMainForm : Form
         Controls.Add(root);
 
         InputPathBrowseButton.Click += InputPathBrowseButton_Click;
-        DwgPathBrowseButton.Click += DwgPathBrowseButton_Click;
+        InputFileSearchTextBox.TextChanged +=
+            InputFileSearchTextBox_TextChanged;
+        RefreshInputFilesButton.Click += RefreshInputFilesButton_Click;
         OutputPathBrowseButton.Click += OutputPathBrowseButton_Click;
         AutoOutputPathCheckBox.CheckedChanged +=
             AutoOutputPathCheckBox_CheckedChanged;
+        AddFolderButton.Click += AddFolderButton_Click;
         AddFilesButton.Click += AddFilesButton_Click;
         MoveSelectedButton.Click += MoveSelectedButton_Click;
         SaveCurrentStateButton.Click += SaveCurrentStateButton_Click;
         InputFilesGrid.SelectionChanged += InputFilesGrid_SelectionChanged;
         TargetFilesGrid.SelectionChanged += TargetFilesGrid_SelectionChanged;
+        TargetFilesGrid.CellMouseDoubleClick +=
+            TargetFilesGrid_CellMouseDoubleClick;
+        InputFilesGrid.CellClick += InputFilesGrid_CellClick;
         InputFilesGrid.KeyDown += FileGrid_KeyDown;
         TargetFilesGrid.KeyDown += FileGrid_KeyDown;
 
         RegisterEnterAsTab(
             InputPathTextBox,
-            DwgPathTextBox,
+            InputFileSearchTextBox,
             OutputPathTextBox,
             ConversionWidthTextBox,
             ConversionHeightTextBox,
@@ -435,10 +487,376 @@ internal sealed class ResizeMainForm : Form
         InputPathTextBox.Text = dialog.SelectedPath;
     }
 
+    private void InputFileSearchTextBox_TextChanged(
+        object? sender,
+        EventArgs e
+    )
+    {
+        ApplyInputFileSearch();
+    }
+
+    private void ApplyInputFileSearch(string? preferredPath = null)
+    {
+        string query = InputFileSearchTextBox.Text.Trim();
+        bool hasQuery = !string.IsNullOrWhiteSpace(query);
+
+        preferredPath ??= InputFilesGrid.CurrentRow?.Tag as string;
+
+        InputFilesGrid.ClearSelection();
+        InputFilesGrid.CurrentCell = null;
+
+        List<DataGridViewRow> folderRows = InputFilesGrid.Rows
+            .Cast<DataGridViewRow>()
+            .Where(row => row.Tag is DwgFolderHeader)
+            .ToList();
+
+        HashSet<DataGridViewRow> groupedRows = new();
+
+        foreach (DataGridViewRow folderRow in folderRows)
+        {
+            if (folderRow.Tag is not DwgFolderHeader folderHeader)
+            {
+                continue;
+            }
+
+            List<DataGridViewRow> childRows = GetFolderChildRows(
+                InputFilesGrid,
+                folderRow,
+                folderHeader.FolderPath
+            );
+
+            foreach (DataGridViewRow childRow in childRows)
+            {
+                groupedRows.Add(childRow);
+            }
+
+            bool folderNameMatches = hasQuery &&
+                GetFolderDisplayName(folderHeader.FolderPath).Contains(
+                    query,
+                    StringComparison.CurrentCultureIgnoreCase
+                );
+
+            bool anyChildMatches = childRows.Any(childRow =>
+                childRow.Tag is string filePath &&
+                FileNameContains(filePath, query)
+            );
+
+            folderRow.Visible =
+                !hasQuery || folderNameMatches || anyChildMatches;
+
+            foreach (DataGridViewRow childRow in childRows)
+            {
+                bool fileNameMatches =
+                    childRow.Tag is string filePath &&
+                    FileNameContains(filePath, query);
+
+                childRow.Visible = hasQuery
+                    ? folderNameMatches || fileNameMatches
+                    : !folderHeader.IsCollapsed;
+            }
+        }
+
+        foreach (DataGridViewRow row in InputFilesGrid.Rows
+            .Cast<DataGridViewRow>()
+            .Where(row =>
+                row.Tag is string &&
+                !groupedRows.Contains(row)
+            ))
+        {
+            if (row.Tag is not string filePath)
+            {
+                continue;
+            }
+
+            row.Visible = !hasQuery ||
+                FileNameContains(filePath, query);
+        }
+
+        RestoreGridSelection(InputFilesGrid, preferredPath);
+        InputFilesGrid_SelectionChanged(
+            InputFilesGrid,
+            EventArgs.Empty
+        );
+    }
+
+    private static bool FileNameContains(
+        string filePath,
+        string query
+    )
+    {
+        string fileName = Path.GetFileName(filePath) ?? string.Empty;
+        return fileName.Contains(
+            query,
+            StringComparison.CurrentCultureIgnoreCase
+        );
+    }
+
+    private void RefreshInputFilesButton_Click(
+        object? sender,
+        EventArgs e
+    )
+    {
+        if (AnalyzeDwgFile == null)
+        {
+            MessageBox.Show(
+                this,
+                "현재 UI 미리보기 모드라서 DWG 분석 코드가 연결되어 있지 않습니다.",
+                "미리보기",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information
+            );
+            return;
+        }
+
+        string? selectedPath = InputFilesGrid.CurrentRow?.Tag as string;
+        int addedCount = 0;
+        int updatedCount = 0;
+        int removedCount = 0;
+        List<string> errors = new();
+
+        RefreshInputFilesButton.Enabled = false;
+        UseWaitCursor = true;
+
+        try
+        {
+            List<DataGridViewRow> folderRows = InputFilesGrid.Rows
+                .Cast<DataGridViewRow>()
+                .Where(row => row.Tag is DwgFolderHeader)
+                .ToList();
+
+            HashSet<DataGridViewRow> groupedRows = folderRows
+                .SelectMany(folderRow =>
+                {
+                    if (folderRow.Tag is not DwgFolderHeader folderHeader)
+                    {
+                        return Enumerable.Empty<DataGridViewRow>();
+                    }
+
+                    return GetFolderChildRows(
+                        InputFilesGrid,
+                        folderRow,
+                        folderHeader.FolderPath
+                    );
+                })
+                .ToHashSet();
+
+            List<DataGridViewRow> standaloneRows = InputFilesGrid.Rows
+                .Cast<DataGridViewRow>()
+                .Where(row =>
+                    row.Tag is string &&
+                    !groupedRows.Contains(row)
+                )
+                .ToList();
+
+            foreach (DataGridViewRow row in standaloneRows)
+            {
+                if (row.Tag is not string filePath)
+                {
+                    continue;
+                }
+
+                if (!File.Exists(filePath))
+                {
+                    InputFilesGrid.Rows.Remove(row);
+                    removedCount++;
+                    continue;
+                }
+
+                try
+                {
+                    ApplySizeToGridRow(row, AnalyzeDwgFile(filePath));
+                    updatedCount++;
+                }
+                catch (Exception ex)
+                {
+                    errors.Add($"{Path.GetFileName(filePath)}: {ex.Message}");
+                }
+            }
+
+            foreach (DataGridViewRow folderRow in folderRows
+                .Where(row => row.DataGridView != null))
+            {
+                if (folderRow.Tag is not DwgFolderHeader folderHeader)
+                {
+                    continue;
+                }
+
+                if (!Directory.Exists(folderHeader.FolderPath))
+                {
+                    errors.Add(
+                        $"{GetFolderDisplayName(folderHeader.FolderPath)}: " +
+                        "폴더를 찾을 수 없습니다."
+                    );
+                    continue;
+                }
+
+                string[] diskFiles;
+
+                try
+                {
+                    diskFiles = Directory
+                        .EnumerateFiles(
+                            folderHeader.FolderPath,
+                            "*",
+                            SearchOption.TopDirectoryOnly
+                        )
+                        .Where(path => string.Equals(
+                            Path.GetExtension(path),
+                            ".dwg",
+                            StringComparison.OrdinalIgnoreCase
+                        ))
+                        .Select(Path.GetFullPath)
+                        .OrderBy(
+                            path => Path.GetFileName(path),
+                            StringComparer.CurrentCultureIgnoreCase
+                        )
+                        .ToArray();
+                }
+                catch (Exception ex)
+                {
+                    errors.Add(
+                        $"{GetFolderDisplayName(folderHeader.FolderPath)}: " +
+                        ex.Message
+                    );
+                    continue;
+                }
+
+                HashSet<string> diskFileSet = diskFiles.ToHashSet(
+                    StringComparer.OrdinalIgnoreCase
+                );
+
+                List<DataGridViewRow> childRows = GetFolderChildRows(
+                    InputFilesGrid,
+                    folderRow,
+                    folderHeader.FolderPath
+                );
+
+                foreach (DataGridViewRow childRow in childRows)
+                {
+                    if (childRow.Tag is not string filePath)
+                    {
+                        continue;
+                    }
+
+                    if (!diskFileSet.Contains(Path.GetFullPath(filePath)))
+                    {
+                        InputFilesGrid.Rows.Remove(childRow);
+                        removedCount++;
+                        continue;
+                    }
+
+                    ApplyFolderChildDisplay(childRow, filePath);
+
+                    try
+                    {
+                        ApplySizeToGridRow(
+                            childRow,
+                            AnalyzeDwgFile(filePath)
+                        );
+                        updatedCount++;
+                    }
+                    catch (Exception ex)
+                    {
+                        errors.Add(
+                            $"{Path.GetFileName(filePath)}: {ex.Message}"
+                        );
+                    }
+                }
+
+                HashSet<string> listedPaths = InputFilesGrid.Rows
+                    .Cast<DataGridViewRow>()
+                    .Select(row => row.Tag as string)
+                    .Where(path => !string.IsNullOrWhiteSpace(path))
+                    .Select(path => Path.GetFullPath(path!))
+                    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
+                foreach (string filePath in diskFiles
+                    .Where(path => !listedPaths.Contains(path)))
+                {
+                    try
+                    {
+                        DwgFileSizeSnapshot size = AnalyzeDwgFile(filePath);
+                        AddFolderChildRow(
+                            folderRow,
+                            folderHeader.FolderPath,
+                            filePath,
+                            size
+                        );
+                        listedPaths.Add(filePath);
+                        addedCount++;
+                    }
+                    catch (Exception ex)
+                    {
+                        errors.Add(
+                            $"{Path.GetFileName(filePath)}: {ex.Message}"
+                        );
+                    }
+                }
+            }
+
+            ApplyInputFileSearch(selectedPath);
+            SaveCurrentUiState(showSuccessMessage: false);
+
+            string resultMessage =
+                $"파일 목록을 새로고침했습니다.\n\n" +
+                $"추가: {addedCount}개\n" +
+                $"갱신: {updatedCount}개\n" +
+                $"제거: {removedCount}개";
+
+            if (errors.Count > 0)
+            {
+                resultMessage +=
+                    "\n\n확인하지 못한 항목:\n" +
+                    string.Join("\n", errors);
+            }
+
+            MessageBox.Show(
+                this,
+                resultMessage,
+                "파일 목록 새로고침",
+                MessageBoxButtons.OK,
+                errors.Count == 0
+                    ? MessageBoxIcon.Information
+                    : MessageBoxIcon.Warning
+            );
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                this,
+                $"파일 목록을 새로고침하지 못했습니다.\n\n{ex.Message}",
+                "새로고침 오류",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning
+            );
+        }
+        finally
+        {
+            UseWaitCursor = false;
+            RefreshInputFilesButton.Enabled = true;
+        }
+    }
+
+    private static void ApplySizeToGridRow(
+        DataGridViewRow row,
+        DwgFileSizeSnapshot size
+    )
+    {
+        row.Cells["Width"].Value = FormatValue(size.Width);
+        row.Cells["Height"].Value = FormatValue(size.Height);
+        row.Cells["Thickness"].Value =
+            FormatNullableValue(size.Thickness);
+    }
+
     private void SaveCurrentStateButton_Click(
         object? sender,
         EventArgs e
     )
+    {
+        SaveCurrentUiState(showSuccessMessage: true);
+    }
+
+    private void SaveCurrentUiState(bool showSuccessMessage)
     {
         try
         {
@@ -453,7 +871,7 @@ internal sealed class ResizeMainForm : Form
             UiSavedState state = new()
             {
                 FileListPath = InputPathTextBox.Text.Trim(),
-                DwgPath = DwgPathTextBox.Text.Trim(),
+                FileSearchText = InputFileSearchTextBox.Text,
                 ManualOutputPath = manualOutputPath,
                 UseAutomaticOutputPath = AutoOutputPathCheckBox.Checked,
                 TargetWidth = ConversionWidthTextBox.Text.Trim(),
@@ -474,13 +892,16 @@ internal sealed class ResizeMainForm : Form
                 )
             );
 
-            MessageBox.Show(
-                this,
-                "현재 UI 값을 저장했습니다.",
-                "저장 완료",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information
-            );
+            if (showSuccessMessage)
+            {
+                MessageBox.Show(
+                    this,
+                    "현재 UI 값을 저장했습니다.",
+                    "저장 완료",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Information
+                );
+            }
         }
         catch (Exception ex)
         {
@@ -513,11 +934,12 @@ internal sealed class ResizeMainForm : Form
             }
 
             InputPathTextBox.Text = state.FileListPath ?? string.Empty;
-            DwgPathTextBox.Text = state.DwgPath ?? string.Empty;
             _manualOutputPath = state.ManualOutputPath ?? string.Empty;
 
             RestoreGridRows(InputFilesGrid, state.InputFiles);
             RestoreGridRows(TargetFilesGrid, state.ConvertedFiles);
+            InputFileSearchTextBox.Text =
+                state.FileSearchText ?? string.Empty;
             RestoreGridSelection(InputFilesGrid, state.SelectedInputPath);
             RestoreGridSelection(
                 TargetFilesGrid,
@@ -558,18 +980,47 @@ internal sealed class ResizeMainForm : Form
 
     private static List<UiSavedFileRow> CaptureGridRows(DataGridView grid)
     {
-        return grid.Rows
+        List<UiSavedFileRow> result = new();
+        string? currentFolderPath = null;
+
+        foreach (DataGridViewRow row in grid.Rows
             .Cast<DataGridViewRow>()
-            .Where(row => !row.IsNewRow)
-            .Select(row => new UiSavedFileRow
+            .Where(row => !row.IsNewRow))
+        {
+            if (row.Tag is DwgFolderHeader folderHeader)
+            {
+                currentFolderPath = folderHeader.FolderPath;
+                result.Add(new UiSavedFileRow
+                {
+                    IsFolderHeader = true,
+                    IsFolderCollapsed = folderHeader.IsCollapsed,
+                    FolderPath = folderHeader.FolderPath,
+                    FileName = GetCellText(row, "FileName")
+                });
+                continue;
+            }
+
+            if (currentFolderPath != null &&
+                !IsFolderChildRow(row, currentFolderPath))
+            {
+                currentFolderPath = null;
+            }
+
+            result.Add(new UiSavedFileRow
             {
                 FilePath = row.Tag as string ?? string.Empty,
+                FolderPath = currentFolderPath,
                 FileName = GetCellText(row, "FileName"),
                 Width = GetCellText(row, "Width"),
                 Height = GetCellText(row, "Height"),
-                Thickness = GetCellText(row, "Thickness")
-            })
-            .ToList();
+                Thickness = GetCellText(row, "Thickness"),
+                ModifiedTime = grid.Columns.Contains("ModifiedTime")
+                    ? GetCellText(row, "ModifiedTime")
+                    : string.Empty
+            });
+        }
+
+        return result;
     }
 
     private static void RestoreGridRows(
@@ -578,17 +1029,77 @@ internal sealed class ResizeMainForm : Form
     )
     {
         grid.Rows.Clear();
+        DwgFolderHeader? currentFolderHeader = null;
 
         foreach (UiSavedFileRow savedRow in savedRows ??
             Enumerable.Empty<UiSavedFileRow>())
         {
+            if (savedRow.IsFolderHeader &&
+                !string.IsNullOrWhiteSpace(savedRow.FolderPath))
+            {
+                int headerIndex = grid.Rows.Add(
+                    string.Empty,
+                    string.Empty,
+                    string.Empty,
+                    string.Empty
+                );
+
+                DataGridViewRow headerRow = grid.Rows[headerIndex];
+                currentFolderHeader = new DwgFolderHeader
+                {
+                    FolderPath = savedRow.FolderPath,
+                    IsCollapsed = savedRow.IsFolderCollapsed
+                };
+                headerRow.Tag = currentFolderHeader;
+                UpdateFolderHeaderText(headerRow, currentFolderHeader);
+                ApplyFolderHeaderStyle(headerRow);
+                continue;
+            }
+
             int rowIndex = grid.Rows.Add(
                 savedRow.FileName,
                 savedRow.Width,
                 savedRow.Height,
                 savedRow.Thickness
             );
-            grid.Rows[rowIndex].Tag = savedRow.FilePath;
+            DataGridViewRow restoredRow = grid.Rows[rowIndex];
+            restoredRow.Tag = savedRow.FilePath;
+
+            if (grid.Columns.Contains("ModifiedTime"))
+            {
+                string modifiedTime = savedRow.ModifiedTime;
+
+                if (string.IsNullOrWhiteSpace(modifiedTime) &&
+                    File.Exists(savedRow.FilePath))
+                {
+                    modifiedTime =
+                        GetFileModifiedTimeText(savedRow.FilePath);
+                }
+
+                restoredRow.Cells["ModifiedTime"].Value =
+                    modifiedTime;
+            }
+
+            bool belongsToCurrentFolder =
+                currentFolderHeader != null &&
+                string.Equals(
+                    savedRow.FolderPath,
+                    currentFolderHeader.FolderPath,
+                    StringComparison.OrdinalIgnoreCase
+                );
+
+            if (belongsToCurrentFolder)
+            {
+                ApplyFolderChildDisplay(
+                    restoredRow,
+                    savedRow.FilePath
+                );
+                restoredRow.Visible = !currentFolderHeader!.IsCollapsed;
+            }
+            else
+            {
+                currentFolderHeader = null;
+            }
         }
     }
 
@@ -601,29 +1112,28 @@ internal sealed class ResizeMainForm : Form
 
         DataGridViewRow? selectedRow = grid.Rows
             .Cast<DataGridViewRow>()
-            .FirstOrDefault(row => string.Equals(
-                row.Tag as string,
-                selectedPath,
-                StringComparison.OrdinalIgnoreCase
-            ));
+            .FirstOrDefault(row =>
+                row.Visible &&
+                string.Equals(
+                    row.Tag as string,
+                    selectedPath,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            );
 
         selectedRow ??= grid.Rows
             .Cast<DataGridViewRow>()
-            .FirstOrDefault();
+            .FirstOrDefault(row =>
+                row.Visible &&
+                row.Tag is string path &&
+                !string.IsNullOrWhiteSpace(path)
+            );
 
         if (selectedRow != null)
         {
             selectedRow.Selected = true;
             grid.CurrentCell = selectedRow.Cells["FileName"];
         }
-    }
-
-    private void DwgPathBrowseButton_Click(
-        object? sender,
-        EventArgs e
-    )
-    {
-        SelectAndAddDwgFile();
     }
 
     private void OutputPathBrowseButton_Click(
@@ -687,6 +1197,63 @@ internal sealed class ResizeMainForm : Form
         SelectAndAddDwgFile();
     }
 
+    private void AddFolderButton_Click(
+        object? sender,
+        EventArgs e
+    )
+    {
+        SelectAndAddDwgFolder();
+    }
+
+    private void SelectAndAddDwgFolder()
+    {
+        string listDirectory = InputPathTextBox.Text.Trim();
+
+        using FolderBrowserDialog dialog = new()
+        {
+            Description = "목록에 추가할 DWG 폴더를 선택하세요",
+            UseDescriptionForTitle = true,
+            ShowNewFolderButton = false,
+            SelectedPath = Directory.Exists(listDirectory)
+                ? listDirectory
+                : string.Empty
+        };
+
+        if (dialog.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        string selectedFolder = Path.GetFullPath(dialog.SelectedPath);
+        string[] dwgFiles = Directory
+            .EnumerateFiles(selectedFolder, "*", SearchOption.TopDirectoryOnly)
+            .Where(path => string.Equals(
+                Path.GetExtension(path),
+                ".dwg",
+                StringComparison.OrdinalIgnoreCase
+            ))
+            .OrderBy(
+                path => Path.GetFileName(path),
+                StringComparer.CurrentCultureIgnoreCase
+            )
+            .ToArray();
+
+        if (dwgFiles.Length == 0)
+        {
+            MessageBox.Show(
+                this,
+                "선택한 폴더에 DWG 파일이 없습니다.",
+                "DWG 폴더 추가",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information
+            );
+            return;
+        }
+
+        InputPathTextBox.Text = selectedFolder;
+        AddDwgFiles(dwgFiles, selectedFolder);
+    }
+
     private void SelectAndAddDwgFile()
     {
         string listDirectory = InputPathTextBox.Text.Trim();
@@ -709,8 +1276,6 @@ internal sealed class ResizeMainForm : Form
             return;
         }
 
-        DwgPathTextBox.Text = dialog.FileName;
-
         string? selectedDirectory = Path.GetDirectoryName(dialog.FileName);
 
         if (string.IsNullOrWhiteSpace(InputPathTextBox.Text) &&
@@ -723,7 +1288,8 @@ internal sealed class ResizeMainForm : Form
     }
 
     private void AddDwgFiles(
-        IEnumerable<string> filePaths
+        IEnumerable<string> filePaths,
+        string? folderGroupPath = null
     )
     {
         if (AnalyzeDwgFile == null)
@@ -739,6 +1305,21 @@ internal sealed class ResizeMainForm : Form
         }
 
         List<string> errors = new();
+        string? normalizedFolderGroupPath =
+            string.IsNullOrWhiteSpace(folderGroupPath)
+                ? null
+                : Path.GetFullPath(folderGroupPath);
+
+        DataGridViewRow? folderHeaderRow =
+            normalizedFolderGroupPath == null
+                ? null
+                : FindFolderHeaderRow(normalizedFolderGroupPath);
+
+        bool hadAnyFileRows = InputFilesGrid.Rows
+            .Cast<DataGridViewRow>()
+            .Any(row => row.Tag is string path &&
+                        !string.IsNullOrWhiteSpace(path));
+        bool addedAnyFile = false;
 
         foreach (string filePath in filePaths
             .Where(path => !string.IsNullOrWhiteSpace(path))
@@ -762,26 +1343,49 @@ internal sealed class ResizeMainForm : Form
             {
                 DwgFileSizeSnapshot size = AnalyzeDwgFile(filePath);
 
-                int inputRowIndex = InputFilesGrid.Rows.Add(
-                    Path.GetFileName(filePath),
-                    FormatValue(size.Width),
-                    FormatValue(size.Height),
-                    FormatNullableValue(size.Thickness)
-                );
-                InputFilesGrid.Rows[inputRowIndex].Tag = filePath;
+                DataGridViewRow inputRow;
 
-                if (InputFilesGrid.Rows.Count == 1)
+                if (normalizedFolderGroupPath == null)
+                {
+                    int inputRowIndex = InputFilesGrid.Rows.Add(
+                        Path.GetFileName(filePath),
+                        FormatValue(size.Width),
+                        FormatValue(size.Height),
+                        FormatNullableValue(size.Thickness)
+                    );
+                    inputRow = InputFilesGrid.Rows[inputRowIndex];
+                    inputRow.Tag = filePath;
+                }
+                else
+                {
+                    folderHeaderRow ??=
+                        AddFolderHeaderRow(normalizedFolderGroupPath);
+
+                    inputRow = AddFolderChildRow(
+                        folderHeaderRow,
+                        normalizedFolderGroupPath,
+                        filePath,
+                        size
+                    );
+                }
+
+                addedAnyFile = true;
+
+                if (!hadAnyFileRows)
                 {
                     SetCurrentSizeBoxes(size);
-                    SetConversionSizeBoxes(InputFilesGrid.Rows[inputRowIndex]);
+                    SetConversionSizeBoxes(inputRow);
+                    InputFilesGrid.ClearSelection();
+                    inputRow.Selected = true;
+                    InputFilesGrid.CurrentCell =
+                        inputRow.Cells["FileName"];
+                    hadAnyFileRows = true;
                 }
 
                 string? directory = Path.GetDirectoryName(filePath);
 
                 if (!string.IsNullOrWhiteSpace(directory))
                 {
-                    DwgPathTextBox.Text = filePath;
-
                     if (string.IsNullOrWhiteSpace(InputPathTextBox.Text))
                     {
                         InputPathTextBox.Text = directory;
@@ -803,6 +1407,8 @@ internal sealed class ResizeMainForm : Form
             }
         }
 
+        ApplyInputFileSearch();
+
         if (errors.Count > 0)
         {
             MessageBox.Show(
@@ -814,6 +1420,184 @@ internal sealed class ResizeMainForm : Form
                 MessageBoxIcon.Warning
             );
         }
+
+        if (addedAnyFile)
+        {
+            SaveCurrentUiState(showSuccessMessage: false);
+        }
+    }
+
+    private DataGridViewRow? FindFolderHeaderRow(string folderPath)
+    {
+        return InputFilesGrid.Rows
+            .Cast<DataGridViewRow>()
+            .FirstOrDefault(row =>
+                row.Tag is DwgFolderHeader folderHeader &&
+                string.Equals(
+                    folderHeader.FolderPath,
+                    folderPath,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            );
+    }
+
+    private DataGridViewRow AddFolderHeaderRow(string folderPath)
+    {
+        int rowIndex = InputFilesGrid.Rows.Add(
+            string.Empty,
+            string.Empty,
+            string.Empty,
+            string.Empty
+        );
+
+        DataGridViewRow row = InputFilesGrid.Rows[rowIndex];
+        row.Tag = new DwgFolderHeader
+        {
+            FolderPath = folderPath
+        };
+        UpdateFolderHeaderText(row, (DwgFolderHeader)row.Tag);
+        ApplyFolderHeaderStyle(row);
+        return row;
+    }
+
+    private DataGridViewRow AddFolderChildRow(
+        DataGridViewRow folderHeaderRow,
+        string folderPath,
+        string filePath,
+        DwgFileSizeSnapshot size
+    )
+    {
+        int insertIndex = folderHeaderRow.Index + 1;
+
+        while (insertIndex < InputFilesGrid.Rows.Count &&
+               IsFolderChildRow(
+                   InputFilesGrid.Rows[insertIndex],
+                   folderPath
+               ))
+        {
+            insertIndex++;
+        }
+
+        InputFilesGrid.Rows.Insert(
+            insertIndex,
+            $"└ {Path.GetFileName(filePath)}",
+            FormatValue(size.Width),
+            FormatValue(size.Height),
+            FormatNullableValue(size.Thickness)
+        );
+
+        DataGridViewRow row = InputFilesGrid.Rows[insertIndex];
+        row.Tag = filePath;
+        ApplyFolderChildDisplay(row, filePath);
+        row.Visible =
+            folderHeaderRow.Tag is not DwgFolderHeader folderHeader ||
+            !folderHeader.IsCollapsed;
+        return row;
+    }
+
+    private static void ApplyFolderChildDisplay(
+        DataGridViewRow row,
+        string filePath
+    )
+    {
+        row.Cells["FileName"].Value =
+            $"└ {Path.GetFileName(filePath)}";
+        row.Cells["FileName"].Style.Padding =
+            new Padding(18, 0, 0, 0);
+    }
+
+    private void InputFilesGrid_CellClick(
+        object? sender,
+        DataGridViewCellEventArgs e
+    )
+    {
+        if (e.RowIndex < 0 || e.ColumnIndex < 0 ||
+            InputFilesGrid.Columns[e.ColumnIndex].Name != "FileName")
+        {
+            return;
+        }
+
+        DataGridViewRow folderRow = InputFilesGrid.Rows[e.RowIndex];
+
+        if (folderRow.Tag is not DwgFolderHeader folderHeader)
+        {
+            return;
+        }
+
+        folderHeader.IsCollapsed = !folderHeader.IsCollapsed;
+        InputFilesGrid.CurrentCell = folderRow.Cells["FileName"];
+
+        foreach (DataGridViewRow childRow in GetFolderChildRows(
+            InputFilesGrid,
+            folderRow,
+            folderHeader.FolderPath
+        ))
+        {
+            childRow.Selected = false;
+            childRow.Visible = !folderHeader.IsCollapsed;
+        }
+
+        UpdateFolderHeaderText(folderRow, folderHeader);
+        ApplyInputFileSearch();
+        InputFilesGrid.Invalidate();
+    }
+
+    private static void UpdateFolderHeaderText(
+        DataGridViewRow row,
+        DwgFolderHeader folderHeader
+    )
+    {
+        string indicator = folderHeader.IsCollapsed ? "▶" : "▼";
+        row.Cells["FileName"].Value =
+            $"{indicator} 📁 {GetFolderDisplayName(folderHeader.FolderPath)}";
+    }
+
+    private static void ApplyFolderHeaderStyle(DataGridViewRow row)
+    {
+        row.ReadOnly = true;
+        row.Height = 32;
+        row.DefaultCellStyle.BackColor = Color.FromArgb(229, 235, 244);
+        row.DefaultCellStyle.ForeColor = Color.FromArgb(31, 41, 55);
+        row.DefaultCellStyle.SelectionBackColor = Color.FromArgb(205, 218, 238);
+        row.DefaultCellStyle.SelectionForeColor = Color.FromArgb(20, 45, 82);
+        row.DefaultCellStyle.Font = new Font(
+            "Segoe UI",
+            9.5F,
+            FontStyle.Bold,
+            GraphicsUnit.Point
+        );
+    }
+
+    private static bool IsFolderChildRow(
+        DataGridViewRow row,
+        string folderPath
+    )
+    {
+        _ = folderPath;
+
+        // 저장 상태에서 복원된 행은 앞쪽 공백 개수가 달라질 수 있다.
+        // 공백 수는 무시하고 폴더 하위 파일 표시인 '└'로 판단한다.
+        string displayedFileName = GetCellText(row, "FileName")
+            .TrimStart();
+
+        return row.Tag is string filePath &&
+               !string.IsNullOrWhiteSpace(filePath) &&
+               displayedFileName.StartsWith(
+                   "└",
+                   StringComparison.Ordinal
+               );
+    }
+
+    private static string GetFolderDisplayName(string folderPath)
+    {
+        string trimmedPath = folderPath.TrimEnd(
+            Path.DirectorySeparatorChar,
+            Path.AltDirectorySeparatorChar
+        );
+        string name = Path.GetFileName(trimmedPath);
+        return string.IsNullOrWhiteSpace(name)
+            ? folderPath
+            : name;
     }
 
     private void InputFilesGrid_SelectionChanged(
@@ -826,6 +1610,7 @@ internal sealed class ResizeMainForm : Form
         if (row == null)
         {
             ClearCurrentSizeBoxes();
+            ClearConversionSizeBoxes();
             return;
         }
 
@@ -849,6 +1634,135 @@ internal sealed class ResizeMainForm : Form
         }
 
         ClearTargetDisplayBoxes();
+    }
+
+    private void TargetFilesGrid_CellMouseDoubleClick(
+        object? sender,
+        DataGridViewCellMouseEventArgs e
+    )
+    {
+        if (e.RowIndex < 0 ||
+            e.RowIndex >= TargetFilesGrid.Rows.Count)
+        {
+            return;
+        }
+
+        DataGridViewRow row = TargetFilesGrid.Rows[e.RowIndex];
+        string? filePath = ResolveTargetFilePath(row);
+
+        if (string.IsNullOrWhiteSpace(filePath))
+        {
+            MessageBox.Show(
+                this,
+                "이 항목의 DWG 파일 경로를 찾을 수 없습니다.",
+                "파일 열기",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning
+            );
+            return;
+        }
+
+        if (!File.Exists(filePath))
+        {
+            MessageBox.Show(
+                this,
+                "수정된 DWG 파일을 찾을 수 없습니다.\n\n" +
+                filePath,
+                "파일 열기",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning
+            );
+            return;
+        }
+
+        try
+        {
+            Process.Start(new ProcessStartInfo
+            {
+                FileName = filePath,
+                WorkingDirectory =
+                    Path.GetDirectoryName(filePath) ?? string.Empty,
+                Verb = "open",
+                UseShellExecute = true
+            });
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                this,
+                "DWG 파일을 실행하지 못했습니다.\n\n" +
+                ex.Message,
+                "파일 열기 오류",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Warning
+            );
+        }
+    }
+
+    private string? ResolveTargetFilePath(DataGridViewRow row)
+    {
+        string? taggedPath = row.Tag as string;
+
+        if (!string.IsNullOrWhiteSpace(taggedPath) &&
+            File.Exists(taggedPath))
+        {
+            return taggedPath;
+        }
+
+        string fileName = GetCellText(row, "FileName").Trim();
+
+        if (string.IsNullOrWhiteSpace(fileName))
+        {
+            return taggedPath;
+        }
+
+        if (!AutoOutputPathCheckBox.Checked)
+        {
+            string manualDirectory = OutputPathTextBox.Text.Trim();
+
+            if (Directory.Exists(manualDirectory))
+            {
+                string manualCandidate = Path.Combine(
+                    manualDirectory,
+                    fileName
+                );
+
+                if (File.Exists(manualCandidate))
+                {
+                    row.Tag = manualCandidate;
+                    return manualCandidate;
+                }
+            }
+        }
+
+        foreach (string inputPath in InputFilesGrid.Rows
+            .Cast<DataGridViewRow>()
+            .Select(inputRow => inputRow.Tag as string)
+            .Where(path => !string.IsNullOrWhiteSpace(path))
+            .Select(path => path!)
+            .Distinct(StringComparer.OrdinalIgnoreCase))
+        {
+            string? inputDirectory = Path.GetDirectoryName(inputPath);
+
+            if (string.IsNullOrWhiteSpace(inputDirectory))
+            {
+                continue;
+            }
+
+            string automaticCandidate = Path.Combine(
+                inputDirectory,
+                "수정된 파일",
+                fileName
+            );
+
+            if (File.Exists(automaticCandidate))
+            {
+                row.Tag = automaticCandidate;
+                return automaticCandidate;
+            }
+        }
+
+        return taggedPath;
     }
 
     private void FileGrid_KeyDown(
@@ -877,24 +1791,48 @@ internal sealed class ResizeMainForm : Form
             .Select(path => path!)
             .ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        if (selectedPaths.Count == 0)
+        List<DataGridViewRow> selectedFolderRows = selectedRows
+            .Where(row => row.Tag is DwgFolderHeader)
+            .ToList();
+
+        foreach (DataGridViewRow folderRow in selectedFolderRows)
+        {
+            if (folderRow.Tag is not DwgFolderHeader folderHeader)
+            {
+                continue;
+            }
+
+            foreach (DataGridViewRow childRow in GetFolderChildRows(
+                sourceGrid,
+                folderRow,
+                folderHeader.FolderPath
+            ))
+            {
+                if (childRow.Tag is string childPath)
+                {
+                    selectedPaths.Add(childPath);
+                }
+            }
+        }
+
+        if (selectedPaths.Count == 0 &&
+            selectedFolderRows.Count == 0)
         {
             return;
         }
 
         RemoveRowsByPath(sourceGrid, selectedPaths);
 
+        foreach (DataGridViewRow folderRow in selectedFolderRows
+            .Where(row => row.DataGridView != null)
+            .ToList())
+        {
+            sourceGrid.Rows.Remove(folderRow);
+        }
+
         if (ReferenceEquals(sourceGrid, InputFilesGrid))
         {
-            if (InputFilesGrid.CurrentRow == null)
-            {
-                ClearCurrentSizeBoxes();
-                ClearConversionSizeBoxes();
-            }
-            else
-            {
-                InputFilesGrid_SelectionChanged(InputFilesGrid, EventArgs.Empty);
-            }
+            ApplyInputFileSearch();
         }
         else
         {
@@ -907,6 +1845,8 @@ internal sealed class ResizeMainForm : Form
                 TargetFilesGrid_SelectionChanged(TargetFilesGrid, EventArgs.Empty);
             }
         }
+
+        SaveCurrentUiState(showSuccessMessage: false);
 
         e.Handled = true;
         e.SuppressKeyPress = true;
@@ -929,6 +1869,74 @@ internal sealed class ResizeMainForm : Form
         }
     }
 
+    private static List<DataGridViewRow> GetFolderChildRows(
+        DataGridView grid,
+        DataGridViewRow folderRow,
+        string folderPath
+    )
+    {
+        List<DataGridViewRow> result = new();
+
+        for (int index = folderRow.Index + 1;
+             index < grid.Rows.Count;
+             index++)
+        {
+            DataGridViewRow row = grid.Rows[index];
+
+            if (row.Tag is DwgFolderHeader)
+            {
+                break;
+            }
+
+            if (!IsFolderChildRow(row, folderPath))
+            {
+                break;
+            }
+
+            result.Add(row);
+        }
+
+        return result;
+    }
+
+    private List<DataGridViewRow> GetSelectedInputFileRows()
+    {
+        List<DataGridViewRow> selectedRows = InputFilesGrid.SelectedRows
+            .Cast<DataGridViewRow>()
+            .ToList();
+
+        if (selectedRows.Count == 0 && InputFilesGrid.CurrentRow != null)
+        {
+            selectedRows.Add(InputFilesGrid.CurrentRow);
+        }
+
+        List<DataGridViewRow> fileRows = new();
+
+        foreach (DataGridViewRow selectedRow in selectedRows)
+        {
+            if (selectedRow.Tag is string filePath &&
+                !string.IsNullOrWhiteSpace(filePath))
+            {
+                fileRows.Add(selectedRow);
+                continue;
+            }
+
+            if (selectedRow.Tag is DwgFolderHeader folderHeader)
+            {
+                fileRows.AddRange(GetFolderChildRows(
+                    InputFilesGrid,
+                    selectedRow,
+                    folderHeader.FolderPath
+                ));
+            }
+        }
+
+        return fileRows
+            .Distinct()
+            .OrderBy(row => row.Index)
+            .ToList();
+    }
+
     private void MoveSelectedButton_Click(
         object? sender,
         EventArgs e
@@ -946,14 +1954,7 @@ internal sealed class ResizeMainForm : Form
             return;
         }
 
-        List<DataGridViewRow> inputRows = InputFilesGrid.SelectedRows
-            .Cast<DataGridViewRow>()
-            .ToList();
-
-        if (inputRows.Count == 0 && InputFilesGrid.CurrentRow != null)
-        {
-            inputRows.Add(InputFilesGrid.CurrentRow);
-        }
+        List<DataGridViewRow> inputRows = GetSelectedInputFileRows();
 
         if (inputRows.Count == 0)
         {
@@ -1087,6 +2088,11 @@ internal sealed class ResizeMainForm : Form
             Enabled = true;
         }
 
+        if (completedFiles.Count > 0)
+        {
+            SaveCurrentUiState(showSuccessMessage: false);
+        }
+
         string message =
             $"변환 완료: {completedFiles.Count}개" +
             (errors.Count > 0
@@ -1133,11 +2139,13 @@ internal sealed class ResizeMainForm : Form
 
         if (resultRow == null)
         {
+            string modifiedTime = GetFileModifiedTimeText(outputPath);
             int rowIndex = TargetFilesGrid.Rows.Add(
                 Path.GetFileName(outputPath),
                 FormatValue(targetWidth),
                 FormatValue(targetHeight),
-                FormatNullableValue(targetThickness)
+                FormatNullableValue(targetThickness),
+                modifiedTime
             );
             resultRow = TargetFilesGrid.Rows[rowIndex];
             resultRow.Tag = outputPath;
@@ -1149,12 +2157,30 @@ internal sealed class ResizeMainForm : Form
             resultRow.Cells["Height"].Value = FormatValue(targetHeight);
             resultRow.Cells["Thickness"].Value =
                 FormatNullableValue(targetThickness);
+            resultRow.Cells["ModifiedTime"].Value =
+                GetFileModifiedTimeText(outputPath);
         }
 
         TargetFilesGrid.ClearSelection();
         resultRow.Selected = true;
         TargetFilesGrid.CurrentCell = resultRow.Cells["FileName"];
         SetTargetSizeBoxes(resultRow);
+    }
+
+    private static string GetFileModifiedTimeText(string filePath)
+    {
+        try
+        {
+            DateTime modifiedTime = File.GetLastWriteTime(filePath);
+            return modifiedTime.ToString(
+                "yyyy-MM-dd HH:mm:ss",
+                CultureInfo.InvariantCulture
+            );
+        }
+        catch
+        {
+            return string.Empty;
+        }
     }
 
     private void SetConversionSizeBoxes(
@@ -1220,9 +2246,22 @@ internal sealed class ResizeMainForm : Form
         DataGridView grid
     )
     {
-        return grid.SelectedRows.Count > 0
-            ? grid.SelectedRows[0]
-            : grid.CurrentRow;
+        DataGridViewRow? selectedFileRow = grid.SelectedRows
+            .Cast<DataGridViewRow>()
+            .FirstOrDefault(row =>
+                row.Tag is string path &&
+                !string.IsNullOrWhiteSpace(path)
+            );
+
+        if (selectedFileRow != null)
+        {
+            return selectedFileRow;
+        }
+
+        return grid.CurrentRow?.Tag is string currentPath &&
+               !string.IsNullOrWhiteSpace(currentPath)
+            ? grid.CurrentRow
+            : null;
     }
 
     private static string GetCellText(
@@ -1329,33 +2368,6 @@ internal sealed class ResizeMainForm : Form
         return layout;
     }
 
-    private static Panel CreateStackedPathPanel(
-        Panel firstPathPanel,
-        Panel secondPathPanel
-    )
-    {
-        Panel panel = new()
-        {
-            Dock = DockStyle.Fill,
-            BackColor = CardBackground
-        };
-
-        TableLayoutPanel layout = new()
-        {
-            Dock = DockStyle.Fill,
-            ColumnCount = 1,
-            RowCount = 2
-        };
-        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
-        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
-        layout.Controls.Add(firstPathPanel, 0, 0);
-        layout.Controls.Add(secondPathPanel, 0, 1);
-
-        panel.Controls.Add(layout);
-        return panel;
-    }
-
     private static Label CreateSectionTitle(string text)
     {
         return new Label
@@ -1418,7 +2430,9 @@ internal sealed class ResizeMainForm : Form
             BackColor = CardBackground
         };
         pathLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        pathLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92F));
+        // 화면 배율이 높아도 "찾아보기" 네 글자가 모두 보이도록
+        // 버튼 열에 충분한 고정 폭을 둔다.
+        pathLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120F));
 
         pathTextBox = new TextBox
         {
@@ -1480,7 +2494,7 @@ internal sealed class ResizeMainForm : Form
             BackColor = CardBackground
         };
         pathLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        pathLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 92F));
+        pathLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 120F));
 
         pathTextBox = new TextBox
         {
@@ -1665,13 +2679,72 @@ internal sealed class ResizeMainForm : Form
         };
     }
 
+    private static void ConfigureTargetFileGridColumns(
+        DataGridView grid
+    )
+    {
+        DataGridViewColumn fileNameColumn = GetRequiredGridColumn(
+            grid,
+            "FileName"
+        );
+        fileNameColumn.AutoSizeMode =
+            DataGridViewAutoSizeColumnMode.Fill;
+        fileNameColumn.FillWeight = 100F;
+        fileNameColumn.MinimumWidth = 320;
+
+        SetFixedGridColumnWidth(
+            GetRequiredGridColumn(grid, "Width"),
+            105
+        );
+        SetFixedGridColumnWidth(
+            GetRequiredGridColumn(grid, "Height"),
+            105
+        );
+        SetFixedGridColumnWidth(
+            GetRequiredGridColumn(grid, "Thickness"),
+            105
+        );
+        SetFixedGridColumnWidth(
+            GetRequiredGridColumn(grid, "ModifiedTime"),
+            210
+        );
+    }
+
+    private static DataGridViewColumn GetRequiredGridColumn(
+        DataGridView grid,
+        string columnName
+    )
+    {
+        return grid.Columns[columnName]
+            ?? throw new InvalidOperationException(
+                $"필수 목록 열을 찾지 못했습니다: {columnName}"
+            );
+    }
+
+    private static void SetFixedGridColumnWidth(
+        DataGridViewColumn column,
+        int width
+    )
+    {
+        column.AutoSizeMode =
+            DataGridViewAutoSizeColumnMode.None;
+        column.Width = width;
+        column.MinimumWidth = width;
+    }
+
     private static Panel CreateGridPanel(
         string title,
         string description,
         DataGridView grid,
-        Button? actionButton
+        Button? leftActionButton,
+        Button? rightActionButton,
+        TextBox? titleSearchTextBox,
+        Button? titleActionButton
     )
     {
+        bool hasActionButtons =
+            leftActionButton != null || rightActionButton != null;
+
         Panel panel = new()
         {
             Dock = DockStyle.Fill,
@@ -1683,11 +2756,21 @@ internal sealed class ResizeMainForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = actionButton == null ? 3 : 4
+            RowCount = hasActionButtons ? 4 : 3
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
-        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
+        // 검색창이 들어가는 제목 행은 TextBox 테두리와 DPI 배율을
+        // 고려해 충분한 높이를 준다.
+        bool hasTitleTools =
+            titleSearchTextBox != null || titleActionButton != null;
+        layout.RowStyles.Add(new RowStyle(
+            SizeType.Absolute,
+            hasTitleTools ? 42F : 34F
+        ));
+        layout.RowStyles.Add(new RowStyle(
+            SizeType.Absolute,
+            hasTitleTools ? 36F : 34F
+        ));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
         Label titleLabel = new()
@@ -1699,6 +2782,52 @@ internal sealed class ResizeMainForm : Form
             TextAlign = ContentAlignment.MiddleLeft
         };
 
+        TableLayoutPanel titleLayout = new()
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = titleSearchTextBox == null &&
+                          titleActionButton == null
+                ? 1
+                : 3,
+            RowCount = 1,
+            Margin = new Padding(0)
+        };
+
+        if (titleSearchTextBox == null && titleActionButton == null)
+        {
+            titleLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100F)
+            );
+        }
+        else
+        {
+            titleLayout.ColumnStyles.Add(
+                // "파일 목록"의 마지막 글자가 DPI 배율에서 잘리지 않도록
+                // 제목 전용 폭을 넉넉하게 확보한다.
+                new ColumnStyle(SizeType.Absolute, 135F)
+            );
+            titleLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Percent, 100F)
+            );
+            titleLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Absolute, 125F)
+            );
+        }
+        titleLayout.RowStyles.Add(
+            new RowStyle(SizeType.Percent, 100F)
+        );
+        titleLayout.Controls.Add(titleLabel, 0, 0);
+
+        if (titleSearchTextBox != null)
+        {
+            titleLayout.Controls.Add(titleSearchTextBox, 1, 0);
+        }
+
+        if (titleActionButton != null)
+        {
+            titleLayout.Controls.Add(titleActionButton, 2, 0);
+        }
+
         Label descriptionLabel = new()
         {
             Text = description,
@@ -1707,11 +2836,11 @@ internal sealed class ResizeMainForm : Form
             TextAlign = ContentAlignment.TopLeft
         };
 
-        layout.Controls.Add(titleLabel, 0, 0);
+        layout.Controls.Add(titleLayout, 0, 0);
         layout.Controls.Add(descriptionLabel, 0, 1);
         layout.Controls.Add(grid, 0, 2);
 
-        if (actionButton != null)
+        if (hasActionButtons)
         {
             layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 56F));
             Panel buttonHost = new()
@@ -1719,7 +2848,40 @@ internal sealed class ResizeMainForm : Form
                 Dock = DockStyle.Fill,
                 Padding = new Padding(0, 12, 0, 0)
             };
-            buttonHost.Controls.Add(actionButton);
+
+            TableLayoutPanel buttonLayout = new()
+            {
+                Dock = DockStyle.Right,
+                Width = 460,
+                ColumnCount = 2,
+                RowCount = 1,
+                Margin = new Padding(0)
+            };
+            buttonLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Absolute, 275F)
+            );
+            buttonLayout.ColumnStyles.Add(
+                new ColumnStyle(SizeType.Absolute, 185F)
+            );
+            buttonLayout.RowStyles.Add(
+                new RowStyle(SizeType.Percent, 100F)
+            );
+
+            if (leftActionButton != null)
+            {
+                leftActionButton.Dock = DockStyle.Fill;
+                leftActionButton.Margin = new Padding(0, 0, 8, 0);
+                buttonLayout.Controls.Add(leftActionButton, 0, 0);
+            }
+
+            if (rightActionButton != null)
+            {
+                rightActionButton.Dock = DockStyle.Fill;
+                rightActionButton.Margin = new Padding(0);
+                buttonLayout.Controls.Add(rightActionButton, 1, 0);
+            }
+
+            buttonHost.Controls.Add(buttonLayout);
             layout.Controls.Add(buttonHost, 0, 3);
         }
 
@@ -1765,7 +2927,7 @@ internal sealed class DwgConversionRequest
 internal sealed class UiSavedState
 {
     public string? FileListPath { get; init; }
-    public string? DwgPath { get; init; }
+    public string? FileSearchText { get; init; }
     public string? ManualOutputPath { get; init; }
     public bool UseAutomaticOutputPath { get; init; }
     public string? TargetWidth { get; init; }
@@ -1779,9 +2941,19 @@ internal sealed class UiSavedState
 
 internal sealed class UiSavedFileRow
 {
+    public bool IsFolderHeader { get; init; }
+    public bool IsFolderCollapsed { get; init; }
+    public string? FolderPath { get; init; }
     public string FilePath { get; init; } = string.Empty;
     public string FileName { get; init; } = string.Empty;
     public string Width { get; init; } = string.Empty;
     public string Height { get; init; } = string.Empty;
     public string Thickness { get; init; } = string.Empty;
+    public string ModifiedTime { get; init; } = string.Empty;
+}
+
+internal sealed class DwgFolderHeader
+{
+    public required string FolderPath { get; init; }
+    public bool IsCollapsed { get; set; }
 }

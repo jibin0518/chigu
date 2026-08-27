@@ -1,6 +1,5 @@
 ﻿using System;
 using System.Collections.Generic;
-using System.Drawing;
 using System.IO;
 using System.Linq;
 using System.Globalization;
@@ -39,14 +38,6 @@ internal static class Program_V2
             AnalyzeDwgFile = AnalyzeDwgFileForUi,
             ConvertDwgFile = ConvertDwgFileFromUi
         };
-
-        // EXE에 설정된 ApplicationIcon을 실행 중인 메인 창에도 적용한다.
-        // 따라서 작업 표시줄과 창 왼쪽 위 아이콘도 EXE 아이콘과 동일해진다.
-        using Icon? applicationIcon = Icon.ExtractAssociatedIcon(Application.ExecutablePath);
-        if (applicationIcon != null)
-        {
-            mainForm.Icon = (Icon)applicationIcon.Clone();
-        }
 
         Application.Run(mainForm);
     }
@@ -104,7 +95,7 @@ internal static class Program_V2
             currentValues.Thickness ??
             double.PositiveInfinity;
 
-        if (effectiveTargetThickness <= 36.0)
+        if (effectiveTargetThickness <= 35.0)
         {
             RemoveThicknessPanelGroups(
                 drawingData,
@@ -174,6 +165,8 @@ internal static class Program_V2
                 : string.Empty) +
             "_v2.dwg"
         );
+
+        outputPath = GetAvailableOutputPath(outputPath);
 
         SaveAsNewDwg(
             document,
@@ -351,7 +344,7 @@ internal static class Program_V2
             }
 
 
-            // 목표 높이(두께)가 36 이하이면 두께 패널 묶음을 통째로 삭제한다.
+            // 목표 높이(두께)가 35 이하이면 두께 패널 묶음을 통째로 삭제한다.
             // 기준 외곽뿐 아니라 빨간 박스, 치수 및 패널에 묶인 모든 객체를 제거하고
             // 이후 크기 수정과 50 간격 재배치 대상에서도 제외한다.
             double effectiveTargetThickness =
@@ -360,7 +353,7 @@ internal static class Program_V2
                 double.PositiveInfinity;
 
             bool thicknessPanelsRemoved =
-                effectiveTargetThickness <= 36.0;
+                effectiveTargetThickness <= 35.0;
 
 
             if (thicknessPanelsRemoved)
@@ -430,6 +423,8 @@ internal static class Program_V2
                 "_v2.dwg"
             );
 
+            outputPath = GetAvailableOutputPath(outputPath);
+
             SaveAsNewDwg(
                 document,
                 outputPath
@@ -441,7 +436,7 @@ internal static class Program_V2
                 $"X: {currentValues.Width:0.###} → {resizeInput.TargetWidth:0.###}\n" +
                 $"Y: {currentValues.Height:0.###} → {resizeInput.TargetHeight:0.###}\n" +
                 (thicknessPanelsRemoved
-                    ? "두께: 목표값 36 이하 — 두께 패널 삭제"
+                    ? "두께: 목표값 35 이하 — 두께 패널 삭제"
                     : resizeInput.TargetThickness.HasValue && currentValues.Thickness.HasValue
                         ? $"두께: {currentValues.Thickness.Value:0.###} → {resizeInput.TargetThickness.Value:0.###}"
                         : "두께 패널 없음"),
@@ -2163,8 +2158,9 @@ internal static class Program_V2
     /// 한 패널의 같은 Y축 줄에 중심이 같은 볼트 구멍 그룹이 정확히 4개 있을 때 처리한다.
     /// 중심당 원이 2개인 2·2·2·2 형식은 목표 가로 120을 기준으로,
     /// 중심당 원이 3개인 3·3·3·3 형식은 목표 가로 140을 기준으로 처리한다.
-    /// 기준 이하이면 중심에 가까운 2그룹을 남기고 바깥 2그룹을 삭제하며,
-    /// 기준 초과이면 중심에 가까운 2그룹을 삭제한다.
+    /// 기준 이하이면 바깥 2그룹, 기준 초과이면 중심에 가까운 2그룹을
+    /// 삭제 후보로 모은다. 후보가 하나 이상이면 확인창을 한 번 표시하고,
+    /// 사용자가 '예'를 선택한 경우에만 실제 삭제한다.
     /// </summary>
     private static void SelectBoltHolePairsByTargetWidth(
         DrawingData drawingData,
@@ -2174,8 +2170,12 @@ internal static class Program_V2
         double yTolerance = 0.001
     )
     {
-        int deletedGroupCount = 0;
-        int deletedCircleCount = 0;
+        List<(PanelGroup Panel, BoltHoleCircleGroup Group)>
+            deletionCandidates = new();
+
+        HashSet<string> candidateGroupKeys = new(
+            StringComparer.OrdinalIgnoreCase
+        );
 
         foreach (PanelGroup panel in panelGroups)
         {
@@ -2276,24 +2276,91 @@ internal static class Program_V2
 
                 foreach (BoltHoleCircleGroup group in groupsToDelete)
                 {
-                    deletedGroupCount++;
+                    string groupKey = string.Join(
+                        "|",
+                        group.Circles
+                            .Select(circle => circle.Handle)
+                            .OrderBy(handle => handle,
+                                StringComparer.OrdinalIgnoreCase)
+                    );
 
-                    foreach (EntityData circleData in group.Circles)
+                    if (candidateGroupKeys.Add(groupKey))
                     {
-                        deletedCircleCount++;
-                        RemoveEntityFromDrawing(
-                            drawingData,
-                            circleData
-                        );
-
-                        panel.Entities.RemoveAll(entity =>
-                            string.Equals(
-                                entity.Handle,
-                                circleData.Handle,
-                                StringComparison.OrdinalIgnoreCase
-                            )
-                        );
+                        deletionCandidates.Add((panel, group));
                     }
+                }
+            }
+        }
+
+        if (deletionCandidates.Count == 0)
+        {
+            return;
+        }
+
+        int candidateCircleCount = deletionCandidates
+            .SelectMany(candidate => candidate.Group.Circles)
+            .Select(circle => circle.Handle)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+
+        string panelNumbers = string.Join(
+            ", ",
+            deletionCandidates
+                .Select(candidate => candidate.Panel.Number)
+                .Distinct()
+                .OrderBy(number => number)
+        );
+
+        DialogResult deleteResult = MessageBox.Show(
+            "일자로 배치된 볼트 구멍 중 기존 크기 규칙에 따른 " +
+            "삭제 후보가 발견되었습니다.\n\n" +
+            $"대상 패널: {panelNumbers}\n" +
+            $"삭제 후보: {deletionCandidates.Count}쌍 " +
+            $"(원 {candidateCircleCount}개)\n" +
+            $"목표 가로: {targetWidth:0.###}\n\n" +
+            "삭제하시겠습니까?\n\n" +
+            "예: 후보 볼트 구멍 삭제\n" +
+            "아니요: 삭제하지 않고 그대로 유지",
+            "볼트 구멍 삭제 확인",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2
+        );
+
+        if (deleteResult != DialogResult.Yes)
+        {
+            return;
+        }
+
+        HashSet<string> deletedCircleHandles = new(
+            StringComparer.OrdinalIgnoreCase
+        );
+
+        foreach (var candidate in deletionCandidates)
+        {
+            foreach (EntityData circleData in candidate.Group.Circles)
+            {
+                if (!deletedCircleHandles.Add(circleData.Handle))
+                {
+                    continue;
+                }
+
+                RemoveEntityFromDrawing(
+                    drawingData,
+                    circleData
+                );
+
+                // 혹시 같은 원이 다른 패널 구성원에도 들어 있으면
+                // 모든 패널 목록에서 함께 제거한다.
+                foreach (PanelGroup targetPanel in panelGroups)
+                {
+                    targetPanel.Entities.RemoveAll(entity =>
+                        string.Equals(
+                            entity.Handle,
+                            circleData.Handle,
+                            StringComparison.OrdinalIgnoreCase
+                        )
+                    );
                 }
             }
         }
@@ -2399,7 +2466,7 @@ internal static class Program_V2
 
 
     /// <summary>
-    /// 목표 높이가 36 이하일 때 모든 두께 패널 묶음을 DWG에서 삭제한다.
+    /// 목표 높이가 35 이하일 때 모든 두께 패널 묶음을 DWG에서 삭제한다.
     /// 패널 기준 폴리선뿐 아니라 빨간 박스, 치수 및 묶인 모든 객체를 제거하며,
     /// 삭제된 패널은 이후 크기 변경과 재배치 목록에서도 제외한다.
     /// </summary>
@@ -3418,13 +3485,6 @@ internal static class Program_V2
             );
 
             newRadius = Math.Max(5.0, newRadius);
-        }
-
-        // 계산된 모서리 구멍 반지름이 20이면 최종값을 19.5로 보정한다.
-        // 아래 중심 이동 계산도 보정된 19.5를 기준으로 처리된다.
-        if (Math.Abs(newRadius - 20.0) <= 0.000001)
-        {
-            newRadius = 19.5;
         }
 
         double radiusDifference = newRadius - oldRadius;
@@ -4774,17 +4834,39 @@ internal static class Program_V2
     {
         ValidateEntitiesBeforeSave(document);
 
-        if (File.Exists(outputPath))
-        {
-            File.Delete(outputPath);
-        }
-
         using DwgWriter writer = new(
             outputPath,
             document
         );
 
         writer.Write();
+    }
+
+    private static string GetAvailableOutputPath(string desiredPath)
+    {
+        if (!File.Exists(desiredPath))
+        {
+            return desiredPath;
+        }
+
+        string directory =
+            Path.GetDirectoryName(desiredPath) ?? string.Empty;
+        string fileName =
+            Path.GetFileNameWithoutExtension(desiredPath);
+        string extension = Path.GetExtension(desiredPath);
+
+        for (int number = 1; ; number++)
+        {
+            string candidatePath = Path.Combine(
+                directory,
+                $"{fileName} ({number}){extension}"
+            );
+
+            if (!File.Exists(candidatePath))
+            {
+                return candidatePath;
+            }
+        }
     }
 
     /// <summary>
