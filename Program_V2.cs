@@ -127,7 +127,7 @@ internal static class Program_V2
 
         ArrangePanelGroupsWithGap(
             panelGroups,
-            50.0,
+            100.0,
             originalNestedVertex16Bindings
         );
 
@@ -346,7 +346,7 @@ internal static class Program_V2
 
             // 목표 높이(두께)가 35 이하이면 두께 패널 묶음을 통째로 삭제한다.
             // 기준 외곽뿐 아니라 빨간 박스, 치수 및 패널에 묶인 모든 객체를 제거하고
-            // 이후 크기 수정과 50 간격 재배치 대상에서도 제외한다.
+            // 이후 크기 수정과 100 간격 재배치 대상에서도 제외한다.
             double effectiveTargetThickness =
                 resizeInput.TargetThickness ??
                 currentValues.Thickness ??
@@ -393,10 +393,10 @@ internal static class Program_V2
             );
 
             // 크기와 치수 수정이 끝난 뒤, 현재 패널 외곽 기준으로
-            // 왼쪽부터 패널 사이 간격을 정확히 50으로 재배치한다.
+            // 왼쪽부터 패널 사이 간격을 정확히 100으로 재배치한다.
             ArrangePanelGroupsWithGap(
                 panelGroups,
-                50.0,
+                100.0,
                 originalNestedVertex16Bindings
             );
 
@@ -4110,6 +4110,8 @@ internal static class Program_V2
             originalNestedVertex16Bindings
     )
     {
+        const double attachedThicknessPanelGap = 30.0;
+
         if (gap < 0.0)
         {
             throw new ArgumentOutOfRangeException(nameof(gap));
@@ -4162,8 +4164,8 @@ internal static class Program_V2
             );
 
 
-        // 먼저 각 일반 패널 주변에 연결된 두께 패널을
-        // 위/아래/좌/우 50 간격 위치로 확정한다.
+        // 빨간 묶음 안의 일반 패널과 연결된 두께 패널은
+        // 위/아래/좌/우 30 간격 위치로 확정한다.
         foreach (PanelGroup mainPanel in mainPanels)
         {
             if (!thicknessBindings.TryGetValue(
@@ -4177,7 +4179,7 @@ internal static class Program_V2
             ArrangeAttachedThicknessPanels(
                 mainPanel,
                 attachedPanels,
-                gap
+                attachedThicknessPanelGap
             );
 
         }
