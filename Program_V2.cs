@@ -3,11 +3,15 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Globalization;
+using System.Reflection;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using ACadSharp;
 using ACadSharp.Entities;
 using ACadSharp.IO;
+using ACadSharp.Objects;
+using ACadSharp.Tables;
 using CSMath;
 
 namespace DwgAutoResize;
@@ -102,12 +106,6 @@ internal static class Program_V2
                 panelGroups
             );
         }
-
-        SelectBoltHolePairsByTargetWidth(
-            drawingData,
-            panelGroups,
-            resizeInput.TargetWidth
-        );
 
         List<ChiguCircleBoltBinding> chiguCircleBoltBindings =
             FindChiguCircleBoltBindings(panelGroups);
@@ -217,28 +215,28 @@ internal static class Program_V2
         if (saveReports)
         {
             // TXT 보고서 출력 비활성화
-            // string directory =
-            //     Path.GetDirectoryName(dwgPath)
-            //     ?? throw new Exception("선택한 DWG 파일의 폴더를 찾지 못했습니다.");
+            string directory =
+                Path.GetDirectoryName(dwgPath)
+                ?? throw new Exception("선택한 DWG 파일의 폴더를 찾지 못했습니다.");
 
-            // string fileName =
-            //     Path.GetFileNameWithoutExtension(dwgPath);
+            string fileName =
+                Path.GetFileNameWithoutExtension(dwgPath);
 
-            // SaveEntityReport(
-            //     drawingData,
-            //     Path.Combine(
-            //         directory,
-            //         $"{fileName}_objects_v2.txt"
-            //     )
-            // );
+            SaveEntityReport(
+                drawingData,
+                Path.Combine(
+                    directory,
+                    $"{fileName}_objects_v2.txt"
+                )
+            );
 
-            // SavePanelGroupReport(
-            //     panelGroups,
-            //     Path.Combine(
-            //         directory,
-            //         $"{fileName}_panels_v2.txt"
-            //     )
-            // );
+            SavePanelGroupReport(
+                panelGroups,
+                Path.Combine(
+                    directory,
+                    $"{fileName}_panels_v2.txt"
+                )
+            );
         }
 
         CurrentDimensionValues currentValues =
@@ -280,15 +278,15 @@ internal static class Program_V2
                 Path.GetFileNameWithoutExtension(dwgPath);
 
             //도형 위치 출력 txt 파일
-            // string reportPath = Path.Combine(
-            //     directory,
-            //     $"{fileName}_objects_v2.txt"
-            // );
+            string reportPath = Path.Combine(
+                directory,
+                $"{fileName}_objects_v2.txt"
+            );
 
-            // SaveEntityReport(
-            //     drawingData,
-            //     reportPath
-            // );
+            SaveEntityReport(
+                drawingData,
+                reportPath
+            );
 
             // 패널 기준 객체:
             // Layer="치구", POLYLINE 계열, 실제 표시 색상=흰색(ACI 7)
@@ -318,15 +316,15 @@ internal static class Program_V2
                     );
 
             //패널안의 객체 출력 txt 파일
-            // string panelReportPath = Path.Combine(
-            //     directory,
-            //     $"{fileName}_panels_v2.txt"
-            // );
+            string panelReportPath = Path.Combine(
+                directory,
+                $"{fileName}_panels_v2.txt"
+            );
 
-            // SavePanelGroupReport(
-            //     panelGroups,
-            //     panelReportPath
-            // );
+            SavePanelGroupReport(
+                panelGroups,
+                panelReportPath
+            );
 
             // 수정 UI에 표시할 현재값은 폴리선 크기가 아니라 DWG 치수값으로 읽는다.
             // X/Y는 일반 패널 중 면적이 가장 큰 사각형 패널의 가로/세로 치수,
@@ -363,15 +361,6 @@ internal static class Program_V2
                     panelGroups
                 );
             }
-            // 한 패널 안에서 같은 Y축에 볼트 구멍 원 4쌍이 있으면
-            // 목표 가로 120 이하: 중심에 가까운 2쌍 유지
-            // 목표 가로 120 초과: 중심에 가까운 2쌍 삭제(바깥쪽 2쌍 유지)
-            SelectBoltHolePairsByTargetWidth(
-                drawingData,
-                panelGroups,
-                resizeInput.TargetWidth
-            );
-
             // 흰색 치구 원 안에 볼트 구멍 레이어 원이 있는 관계를
             // 도형 수정과 재배치 전에 기억한다.
             List<ChiguCircleBoltBinding> chiguCircleBoltBindings =
@@ -943,19 +932,26 @@ internal static class Program_V2
             .Where(x => x.HasBoundingBox)
             .ToList();
 
-        // 흰색 치구 원 안에 볼트 구멍 원이 있으면
-        // 사각형/폴리선과 동일하게 독립 패널 기준으로 사용한다.
-        List<EntityData> allWhiteChiguCircleBases = drawingData.Entities
-            .Where(IsWhiteChiguCircle)
-            .Where(circle => drawingData.Entities.Any(entity =>
-                entity.Entity is Circle &&
-                string.Equals(
-                    entity.LayerName,
-                    "볼트 구멍",
-                    StringComparison.OrdinalIgnoreCase
-                ) &&
-                IsEntityInsideCircle(entity, circle, 0.001)
+        // 원형 기준은 다음 둘 중 하나만 만족하면 사용한다(OR 조건).
+        // 1. 흰색 치구 원
+        // 2. 내부에 볼트 구멍 원이 있는 일반 원
+        // 볼트 구멍 원 자체는 외곽 기준으로 사용하지 않는다.
+        List<EntityData> allCirclePanelBases = drawingData.Entities
+            .Where(entity => entity.Entity is Circle)
+            .Where(entity => !IsBoltHoleCircle(entity))
+            // 큰 흰색 치구 폴리선 내부의 원은 그 패널의 구성원이다.
+            // 내부 원 하나를 별도 기준 패널로 중복 인식하지 않는다.
+            .Where(circle => !allWhiteChiguPolylines.Any(outer =>
+                IsCompletelyInside(circle, outer, 0.001)
             ))
+            .Where(circle =>
+                IsWhiteChiguCircle(circle) ||
+                drawingData.Entities.Any(entity =>
+                    !ReferenceEquals(entity, circle) &&
+                    IsBoltHoleCircle(entity) &&
+                    IsEntityInsideCircle(entity, circle, 0.001)
+                )
+            )
             .ToList();
 
         // 다른 흰색 치구 폴리선 안에 완전히 들어가는 일반 사각형은
@@ -970,7 +966,7 @@ internal static class Program_V2
                     IsCompletelyInside(candidate, other, 0.001)
                 )
             )
-            .Concat(allWhiteChiguCircleBases)
+            .Concat(allCirclePanelBases)
             .GroupBy(entity => entity.Handle)
             .Select(group => group.First())
             .ToList();
@@ -991,9 +987,9 @@ internal static class Program_V2
 
         List<EntityData> normalPanelBases = allPanelBases
             .Where(x => !thicknessBaseHandles.Contains(x.Handle))
-            // 원형 패널이 내부 볼트 구멍을 먼저 소유하게 하고,
-            // 그 다음 중첩된 16꼭짓점 패널을 처리한다.
-            .OrderByDescending(IsWhiteChiguCircle)
+            // 일반 폴리선 기준을 모두 검사한 뒤 원형 기준을 마지막에 검사한다.
+            // bool 오름차순은 false(폴리선) 다음 true(원) 순서가 된다.
+            .OrderBy(entity => entity.Entity is Circle)
             .ThenByDescending(IsVertex16PanelBase)
             .ThenBy(x => x.MinX)
             .ThenByDescending(x => x.MaxY)
@@ -1023,7 +1019,7 @@ internal static class Program_V2
                 IsVertex16PanelBase(panelBase);
 
             bool isCirclePanel =
-                IsWhiteChiguCircle(panelBase);
+                panelBase.Entity is Circle;
 
             // 다른 사각형 안에 들어 있지 않은 16꼭짓점만 독립 객체로 본다.
             // 바깥 사각형과 내부 3~8꼭짓점 도형을 가진 패널 안의
@@ -1105,11 +1101,13 @@ internal static class Program_V2
                 .ToList();
 
             // 16꼭짓점 외곽은 내부 객체가 없어도 그 자체로 독립 패널이다.
-            // 그 외 패널은 기존 조건대로 구성원이 2개 이상이어야 한다.
-            int minimumMemberCount =
-                isVertex16Panel ? 1 : 2;
+            // 그 외 패널은 기준 객체를 제외한 구성원이 1개 이상이어야 한다.
+            // 즉 기준 객체까지 포함하면 묶인 객체 수가 최소 2개여야 한다.
+            int includedObjectCount = members.Count(member =>
+                !ReferenceEquals(member, panelBase)
+            );
 
-            if (members.Count < minimumMemberCount)
+            if (!isVertex16Panel && includedObjectCount < 1)
             {
                 return;
             }
@@ -1208,7 +1206,7 @@ internal static class Program_V2
             );
         }
 
-        // 2. 남은 객체만 사용해 일반 패널을 찾는다.
+        // 2. 일반 폴리선 기준을 먼저, 원형 기준을 마지막에 검사한다.
         foreach (EntityData normalBase in normalPanelBases)
         {
             TryAddPanel(
@@ -1218,13 +1216,29 @@ internal static class Program_V2
         }
 
         // 모든 패널 탐색이 끝난 뒤 치수 소속을 다시 결정한다.
-        // 패널마다 가로 1개와 세로 1개만 허용하므로
-        // 각 패널은 치수를 0~2개까지 포함할 수 있다.
-        AssignDimensionsToPanels(
-            drawingData,
-            result,
-            allWhiteChiguPolylines
-        );
+        // 치수 재배정 후에도 기준 객체 외 구성원이 1개 미만인 일반
+        // 패널은 제거한다. 제거된 패널이 치수를 선점했을 수 있으므로
+        // 남은 패널을 대상으로 다시 배정하며 결과가 안정될 때까지 반복한다.
+        while (result.Count > 0)
+        {
+            AssignDimensionsToPanels(
+                drawingData,
+                result,
+                allWhiteChiguPolylines
+            );
+
+            int removedPanelCount = result.RemoveAll(panel =>
+                !IsVertex16PanelBase(panel.BasePolyline) &&
+                panel.Entities.Count(entity =>
+                    !ReferenceEquals(entity, panel.BasePolyline)
+                ) < 1
+            );
+
+            if (removedPanelCount == 0)
+            {
+                break;
+            }
+        }
 
         // 출력 순서는 도면상 왼쪽부터 다시 정렬하고 번호를 재지정한다.
         result = result
@@ -1553,6 +1567,19 @@ internal static class Program_V2
              entity.ColorIndex == 7);
     }
 
+    private static bool IsBoltHoleCircle(
+        EntityData entity
+    )
+    {
+        return
+            entity.Entity is Circle &&
+            string.Equals(
+                entity.LayerName,
+                "볼트 구멍",
+                StringComparison.OrdinalIgnoreCase
+            );
+    }
+
     private static bool IsEntityInsideCircle(
         EntityData inner,
         EntityData outerCircleData,
@@ -1698,7 +1725,7 @@ internal static class Program_V2
 
         writer.WriteLine($"찾은 패널 수: {panelGroups.Count}");
         writer.WriteLine(
-            "기준: 흰색 치구 POLYLINE 또는 내부에 볼트 구멍 원이 있는 흰색 치구 CIRCLE"
+            "기준: 흰색 치구 POLYLINE, 흰색 치구 CIRCLE 또는 내부에 볼트 구멍이 있는 CIRCLE"
         );
         writer.WriteLine("포함 범위: 기준 외곽 바운딩박스 사방 30");
         writer.WriteLine();
@@ -1803,15 +1830,8 @@ internal static class Program_V2
         foreach (PanelGroup panel in panelGroups
             .Where(x => x.IsThicknessPanel))
         {
-            DimensionDirection shortDirection =
-                panel.ThicknessDirection == ThicknessPanelDirection.Horizontal
-                    ? DimensionDirection.Vertical
-                    : DimensionDirection.Horizontal;
-
-            DimensionValueInfo? candidate = GetPanelDimensionValues(panel)
-                .Where(x => x.Direction == shortDirection)
-                .OrderByDescending(x => x.Value)
-                .FirstOrDefault();
+            DimensionValueInfo? candidate =
+                GetThicknessPanelDimension(panel);
 
             if (candidate == null)
             {
@@ -1838,6 +1858,33 @@ internal static class Program_V2
             ThicknessPanel = thicknessSourcePanel,
             ThicknessDimension = thicknessDimension
         };
+    }
+
+    private static DimensionValueInfo? GetThicknessPanelDimension(
+        PanelGroup panel
+    )
+    {
+        DimensionDirection shortDirection =
+            panel.ThicknessDirection switch
+            {
+                ThicknessPanelDirection.Horizontal =>
+                    DimensionDirection.Vertical,
+
+                ThicknessPanelDirection.Vertical =>
+                    DimensionDirection.Horizontal,
+
+                _ => DimensionDirection.Unknown
+            };
+
+        if (shortDirection == DimensionDirection.Unknown)
+        {
+            return null;
+        }
+
+        return GetPanelDimensionValues(panel)
+            .Where(x => x.Direction == shortDirection)
+            .OrderByDescending(x => x.Value)
+            .FirstOrDefault();
     }
 
     private static List<DimensionValueInfo> GetPanelDimensionValues(
@@ -2466,7 +2513,8 @@ internal static class Program_V2
 
 
     /// <summary>
-    /// 목표 높이가 35 이하일 때 모든 두께 패널 묶음을 DWG에서 삭제한다.
+    /// 목표 높이가 35 이하일 때 일반 두께 패널 묶음을 DWG에서 삭제한다.
+    /// 짧은 변이 18인 고정형 두께 패널은 삭제하지 않는다.
     /// 패널 기준 폴리선뿐 아니라 빨간 박스, 치수 및 묶인 모든 객체를 제거하며,
     /// 삭제된 패널은 이후 크기 변경과 재배치 목록에서도 제외한다.
     /// </summary>
@@ -2475,10 +2523,17 @@ internal static class Program_V2
         List<PanelGroup> panelGroups
     )
     {
+        List<PanelGroup> fixedThicknessPanels = panelGroups
+            .Where(IsFixed18ThicknessPanel)
+            .ToList();
+
         // FindPanelGroups에서 최초 확정된 두께 패널만 삭제한다.
         // 여기서 비율을 다시 계산하면 일반 패널이 두께 패널로 뒤집힐 수 있다.
         List<PanelGroup> thicknessPanels = panelGroups
-            .Where(panel => panel.IsThicknessPanel)
+            .Where(panel =>
+                panel.IsThicknessPanel &&
+                !IsFixed18ThicknessPanel(panel)
+            )
             .ToList();
 
         if (thicknessPanels.Count == 0)
@@ -2491,6 +2546,15 @@ internal static class Program_V2
                 .Append(panel.BasePolyline))
             .Select(data => data.Entity)
             .ToHashSet();
+
+        HashSet<Entity> fixedPanelEntities = fixedThicknessPanels
+            .SelectMany(panel => panel.Entities
+                .Append(panel.BasePolyline))
+            .Select(data => data.Entity)
+            .ToHashSet();
+
+        // 다른 패널에 중복으로 묶인 경우에도 18 고정 패널 객체는 보호한다.
+        entitiesToRemove.ExceptWith(fixedPanelEntities);
 
 
         foreach (Entity entity in entitiesToRemove)
@@ -2551,10 +2615,14 @@ internal static class Program_V2
     {
         double widthDelta = input.TargetWidth - current.Width;
         double heightDelta = input.TargetHeight - current.Height;
-        double thicknessDelta =
-            input.TargetThickness.HasValue && current.Thickness.HasValue
-                ? input.TargetThickness.Value - current.Thickness.Value
-                : 0.0;
+
+        Dictionary<PanelGroup, double?> panelCurrentThicknesses =
+            panelGroups
+                .Where(panel => panel.IsThicknessPanel)
+                .ToDictionary(
+                    panel => panel,
+                    panel => GetThicknessPanelDimension(panel)?.Value
+                );
 
 
         HashSet<string> processedHandles = new();
@@ -2564,13 +2632,38 @@ internal static class Program_V2
         {
             // 원형 패널 기준 원은 아래의 전용 계산식으로 수정한다.
             // 폴리선 전용 ResizeSinglePanel에 넘기면 예외가 발생한다.
-            if (IsWhiteChiguCircle(panel.BasePolyline))
+            if (panel.BasePolyline.Entity is Circle)
             {
                 continue;
             }
 
             double panelWidthDelta;
             double panelHeightDelta;
+
+            bool keepPanelShortSideFixed =
+                IsFixed18ThicknessPanel(panel);
+
+            double panelThicknessDelta = 0.0;
+
+            if (panel.IsThicknessPanel && input.TargetThickness.HasValue)
+            {
+                double? panelCurrentThickness =
+                    panelCurrentThicknesses.TryGetValue(
+                        panel,
+                        out double? ownThickness)
+                            ? ownThickness
+                            : null;
+
+                // 개별 치수를 읽지 못한 패널만 전체 현재 두께를 예비값으로 사용한다.
+                panelCurrentThickness ??= current.Thickness;
+
+                if (panelCurrentThickness.HasValue)
+                {
+                    panelThicknessDelta =
+                        input.TargetThickness.Value -
+                        panelCurrentThickness.Value;
+                }
+            }
 
             if (!panel.IsThicknessPanel)
             {
@@ -2580,16 +2673,30 @@ internal static class Program_V2
             else if (panel.ThicknessDirection == ThicknessPanelDirection.Horizontal)
             {
                 panelWidthDelta = widthDelta;
-                panelHeightDelta = thicknessDelta;
+                panelHeightDelta = panelThicknessDelta;
             }
             else if (panel.ThicknessDirection == ThicknessPanelDirection.Vertical)
             {
-                panelWidthDelta = thicknessDelta;
+                panelWidthDelta = panelThicknessDelta;
                 panelHeightDelta = heightDelta;
             }
             else
             {
                 continue;
+            }
+
+            // 수정 전 짧은 변이 18인 두께 패널은 목표 두께와 관계없이
+            // 가로형은 높이를, 세로형은 너비를 그대로 유지한다.
+            if (keepPanelShortSideFixed)
+            {
+                if (panel.ThicknessDirection == ThicknessPanelDirection.Horizontal)
+                {
+                    panelHeightDelta = 0.0;
+                }
+                else if (panel.ThicknessDirection == ThicknessPanelDirection.Vertical)
+                {
+                    panelWidthDelta = 0.0;
+                }
             }
 
 
@@ -2622,9 +2729,26 @@ internal static class Program_V2
         );
     }
 
+    private static bool IsFixed18ThicknessPanel(
+        PanelGroup panel
+    )
+    {
+        const double fixedShortSide = 18.0;
+        const double tolerance = 0.001;
+
+        double shortSide = Math.Min(
+            panel.BasePolyline.Width,
+            panel.BasePolyline.Height
+        );
+
+        return
+            panel.IsThicknessPanel &&
+            Math.Abs(shortSide - fixedShortSide) <= tolerance;
+    }
+
     /// <summary>
-    /// 흰색 치구 원 안에 볼트 구멍 레이어 원이 있는 경우를 찾는다.
-    /// 동심 볼트 원이 여러 개면 흰색 원 중심에 가장 가까운 원 하나만 연결한다.
+    /// 원형 기준 안에 볼트 구멍 레이어 원이 있는 경우를 찾는다.
+    /// 동심 볼트 원이 여러 개면 기준 원 중심에 가장 가까운 원 하나만 연결한다.
     /// </summary>
     private static List<ChiguCircleBoltBinding>
         FindChiguCircleBoltBindings(
@@ -2633,7 +2757,7 @@ internal static class Program_V2
     {
         List<PanelGroup> circlePanels = panelGroups
             .Where(panel =>
-                IsWhiteChiguCircle(panel.BasePolyline))
+                panel.BasePolyline.Entity is Circle)
             .ToList();
 
         List<ChiguCircleBoltBinding> result = new();
@@ -4834,14 +4958,1134 @@ internal static class Program_V2
         string outputPath
     )
     {
-        ValidateEntitiesBeforeSave(document);
+        // 원본 CadDocument를 그대로 다시 쓰면 삭제된 객체의 Handle이나
+        // BlockRecord 참조가 남을 수 있다. 최종 형상만 새 문서로 복제해
+        // Handle, Owner 및 테이블 참조를 처음부터 다시 구성한다.
+        CadDocument cleanDocument =
+            CreateCleanOutputDocument(document);
+
+        ValidateEntitiesBeforeSave(cleanDocument);
 
         using DwgWriter writer = new(
             outputPath,
-            document
+            cleanDocument
         );
 
         writer.Write();
+    }
+
+    /// <summary>
+    /// 생성된 DWG와 같은 폴더에 원본/수정 후 구성요소 보고서를 저장한다.
+    /// 원본 보고서는 도면 수정 전에 만든 문자열을 사용하므로 실제 입력
+    /// 파일 상태와 새 CadDocument 상태를 서로 비교할 수 있다.
+    /// </summary>
+    private static void SaveDocumentComponentReports(
+        string outputDwgPath,
+        string originalDocumentComponentReport,
+        CadDocument cleanDocument
+    )
+    {
+        string outputDirectory =
+            Path.GetDirectoryName(outputDwgPath)
+            ?? throw new Exception(
+                "출력 DWG 파일의 폴더를 찾지 못했습니다."
+            );
+
+        string outputFileName =
+            Path.GetFileNameWithoutExtension(outputDwgPath);
+
+        string originalReportPath = Path.Combine(
+            outputDirectory,
+            $"{outputFileName}_원본_구성요소.txt"
+        );
+
+        string modifiedReportPath = Path.Combine(
+            outputDirectory,
+            $"{outputFileName}_수정후_구성요소.txt"
+        );
+
+        File.WriteAllText(
+            originalReportPath,
+            originalDocumentComponentReport,
+            new UTF8Encoding(true)
+        );
+
+        File.WriteAllText(
+            modifiedReportPath,
+            BuildDocumentComponentReport(
+                cleanDocument,
+                "수정 후 새 도면"
+            ),
+            new UTF8Encoding(true)
+        );
+    }
+
+    /// <summary>
+    /// 프록시 경고 원인을 비교할 수 있도록 문서의 DXF 클래스, 테이블,
+    /// Layout, BlockRecord 및 각 공간의 엔티티를 한 보고서로 만든다.
+    /// </summary>
+    private static string BuildDocumentComponentReport(
+        CadDocument document,
+        string reportTitle
+    )
+    {
+        StringBuilder builder = new();
+
+        builder.AppendLine($"===== {reportTitle} 구성요소 =====");
+        builder.AppendLine($"작성 시각: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        builder.AppendLine($"DWG 버전: {document.Header.Version}");
+        builder.AppendLine($"코드 페이지: {document.Header.CodePage}");
+        builder.AppendLine($"Handle Seed: {document.Header.HandleSeed:X}");
+        builder.AppendLine();
+
+        WriteDxfClassReport(builder, document);
+        WriteTableReport(builder, document);
+        WriteLayoutReport(builder, document);
+        WriteBlockAndEntityReport(builder, document);
+
+        return builder.ToString();
+    }
+
+    private static void WriteDxfClassReport(
+        StringBuilder builder,
+        CadDocument document
+    )
+    {
+        builder.AppendLine("[DXF CLASS / 프록시 확인]");
+        builder.AppendLine($"CLASS 수: {document.Classes.Count}");
+
+        int index = 0;
+        foreach (ACadSharp.Classes.DxfClass dxfClass in
+            document.Classes.OrderBy(item => item.ClassNumber))
+        {
+            builder.AppendLine(
+                $"  [{index++}] Number={dxfClass.ClassNumber}, " +
+                $"DXF={dxfClass.DxfName}, " +
+                $"C++={dxfClass.CppClassName}, " +
+                $"Application={dxfClass.ApplicationName}, " +
+                $"Instances={dxfClass.InstanceCount}, " +
+                $"Entity={dxfClass.IsAnEntity}, " +
+                $"WasProxy={dxfClass.WasZombie}, " +
+                $"ProxyFlags={dxfClass.ProxyFlags}, " +
+                $"Version={dxfClass.DwgVersion}"
+            );
+        }
+
+        builder.AppendLine();
+    }
+
+    private static void WriteTableReport(
+        StringBuilder builder,
+        CadDocument document
+    )
+    {
+        builder.AppendLine("[TABLE 요약]");
+        builder.AppendLine($"레이어: {document.Layers.Count}");
+        foreach (Layer layer in document.Layers.OrderBy(item => item.Name))
+        {
+            builder.AppendLine(
+                $"  Layer: Name={layer.Name}, " +
+                $"Handle={layer.Handle:X}, " +
+                $"Color={layer.Color.Index}, " +
+                $"LineType={layer.LineType?.Name ?? "(없음)"}"
+            );
+        }
+
+        builder.AppendLine($"선종류: {document.LineTypes.Count}");
+        foreach (LineType lineType in
+            document.LineTypes.OrderBy(item => item.Name))
+        {
+            builder.AppendLine(
+                $"  LineType: Name={lineType.Name}, " +
+                $"Handle={lineType.Handle:X}"
+            );
+        }
+
+        builder.AppendLine($"문자 스타일: {document.TextStyles.Count}");
+        foreach (TextStyle textStyle in
+            document.TextStyles.OrderBy(item => item.Name))
+        {
+            builder.AppendLine(
+                $"  TextStyle: Name={textStyle.Name}, " +
+                $"Handle={textStyle.Handle:X}, " +
+                $"Height={textStyle.Height:0.######}, " +
+                $"LastHeight={textStyle.LastHeight:0.######}, " +
+                $"Width={textStyle.Width:0.######}, " +
+                $"Font={textStyle.Filename}, " +
+                $"BigFont={textStyle.BigFontFilename}"
+            );
+        }
+
+        builder.AppendLine($"치수 스타일: {document.DimensionStyles.Count}");
+        foreach (DimensionStyle dimensionStyle in
+            document.DimensionStyles.OrderBy(item => item.Name))
+        {
+            builder.AppendLine(
+                $"  DimStyle: Name={dimensionStyle.Name}, " +
+                $"Handle={dimensionStyle.Handle:X}, " +
+                $"TextStyle={dimensionStyle.Style?.Name ?? "(없음)"}, " +
+                $"TextHeight={dimensionStyle.TextHeight:0.######}, " +
+                $"ArrowSize={dimensionStyle.ArrowSize:0.######}, " +
+                $"ScaleFactor={dimensionStyle.ScaleFactor:0.######}, " +
+                $"LineType={dimensionStyle.LineType?.Name ?? "(없음)"}, " +
+                $"ArrowBlock={dimensionStyle.ArrowBlock?.Name ?? "(없음)"}"
+            );
+        }
+
+        builder.AppendLine($"블록 레코드: {document.BlockRecords.Count}");
+        builder.AppendLine($"등록 앱: {document.AppIds.Count}");
+        builder.AppendLine($"UCS: {document.UCSs.Count}");
+        builder.AppendLine($"View: {document.Views.Count}");
+        builder.AppendLine($"VPort: {document.VPorts.Count}");
+        builder.AppendLine();
+    }
+
+    private static void WriteLayoutReport(
+        StringBuilder builder,
+        CadDocument document
+    )
+    {
+        builder.AppendLine("[LAYOUT]");
+
+        List<Layout> layouts = document.Layouts?.ToList()
+            ?? new List<Layout>();
+
+        builder.AppendLine($"Layout 수: {layouts.Count}");
+        foreach (Layout layout in layouts.OrderBy(item => item.TabOrder))
+        {
+            builder.AppendLine(
+                $"  Name={layout.Name}, " +
+                $"Handle={layout.Handle:X}, " +
+                $"TabOrder={layout.TabOrder}, " +
+                $"PaperSpace={layout.IsPaperSpace}, " +
+                $"Block={layout.AssociatedBlock?.Name ?? "(없음)"}, " +
+                $"EntityCount={layout.AssociatedBlock?.Entities.Count ?? 0}"
+            );
+        }
+
+        builder.AppendLine();
+    }
+
+    private static void WriteBlockAndEntityReport(
+        StringBuilder builder,
+        CadDocument document
+    )
+    {
+        builder.AppendLine("[BLOCK / ENTITY]");
+
+        foreach (BlockRecord block in
+            document.BlockRecords.OrderBy(item => item.Name))
+        {
+            builder.AppendLine(
+                $"Block: Name={block.Name}, " +
+                $"Handle={block.Handle:X}, " +
+                $"EntityCount={block.Entities.Count}"
+            );
+
+            foreach (IGrouping<string, Entity> group in
+                block.Entities
+                    .GroupBy(entity => entity.ObjectName)
+                    .OrderBy(group => group.Key))
+            {
+                builder.AppendLine(
+                    $"  종류 합계: {group.Key} = {group.Count()}"
+                );
+            }
+
+            int entityIndex = 0;
+            foreach (Entity entity in block.Entities)
+            {
+                builder.Append(
+                    $"  [{entityIndex++}] " +
+                    $"DXF={entity.ObjectName}, " +
+                    $"CLR={entity.GetType().FullName}, " +
+                    $"Handle={entity.Handle:X}, " +
+                    $"Layer={entity.Layer?.Name ?? "(없음)"}, " +
+                    $"Color={entity.Color.Index}"
+                );
+
+                switch (entity)
+                {
+                    case TextEntity text:
+                        builder.Append(
+                            $", TextStyle={text.Style?.Name ?? "(없음)"}, " +
+                            $"Height={text.Height:0.######}"
+                        );
+                        break;
+
+                    case MText mText:
+                        builder.Append(
+                            $", TextStyle={mText.Style?.Name ?? "(없음)"}, " +
+                            $"Height={mText.Height:0.######}"
+                        );
+                        break;
+
+                    case Dimension dimension:
+                        builder.Append(
+                            $", DimStyle={dimension.Style?.Name ?? "(없음)"}, " +
+                            $"Measurement={dimension.Measurement:0.######}, " +
+                            $"DimBlock={dimension.Block?.Name ?? "(없음)"}"
+                        );
+                        break;
+
+                    case Insert insert:
+                        builder.Append(
+                            $", InsertBlock={insert.Block?.Name ?? "(없음)"}"
+                        );
+                        break;
+                }
+
+                builder.AppendLine();
+            }
+
+            builder.AppendLine();
+        }
+    }
+
+    /// <summary>
+    /// 수정 결과에서 실제로 사용하는 객체만 새 CadDocument로 옮긴다.
+    /// Clone된 객체는 Handle과 Owner가 초기화되며 새 문서에 추가될 때
+    /// Layer, LineType, DimensionStyle 및 BlockRecord가 새로 등록된다.
+    /// </summary>
+    private static CadDocument CreateCleanOutputDocument(
+        CadDocument sourceDocument
+    )
+    {
+        // 기본 문서를 만든 뒤 Header.Version만 바꾸면, 생성 시 들어간
+        // 기본 ObjectDBX 객체는 처음 버전의 형식으로 남을 수 있다.
+        // 처음부터 원본과 같은 버전으로 생성해야 내부 기본 객체까지
+        // 동일한 DWG 버전에 맞게 만들어진다.
+        CadDocument cleanDocument = new(
+            sourceDocument.Header.Version
+        );
+
+        // CadDocument(AC1015)도 ACadSharp 내부에서 최신 버전용 기본
+        // 비그래픽 객체를 자동 생성한다. 원본 AutoCAD 2000 도면에는
+        // 없던 아래 22개 객체가 ObjectDBX 프록시로 표시되므로 제거한다.
+        // TABLESTYLE 1 + MATERIAL 3 + SCALE 17 + MLEADERSTYLE 1 = 22
+        RemoveModernDefaultObjects(cleanDocument);
+
+        // AC1015 같은 구형 DWG는 문자열을 유니코드가 아니라 도면의
+        // 코드페이지로 기록한다. 새 문서의 기본 ANSI_1252를 그대로
+        // 사용하면 한글 Layout 이름과 한글 문자가 ??로 치환된다.
+        // 원본에서 읽은 DWGCODEPAGE를 반드시 새 문서에도 유지한다.
+        cleanDocument.Header.CodePage =
+            sourceDocument.Header.CodePage;
+
+        cleanDocument.Header.ShowModelSpace = true;
+
+        // 객체를 먼저 추가하면 같은 이름의 기본 Standard 스타일에
+        // 연결되면서 원본의 글자 높이, 화살표 크기 등이 사라진다.
+        // 모든 객체와 Layout을 복사하기 전에 원본 스타일을 구성한다.
+        CopySourceDrawingStyles(
+            sourceDocument,
+            cleanDocument
+        );
+
+        List<string> skippedEntityTypes = new();
+
+        foreach (Entity sourceEntity in sourceDocument.Entities)
+        {
+            if (!IsSupportedCleanOutputEntity(sourceEntity))
+            {
+                skippedEntityTypes.Add(sourceEntity.ObjectName);
+                continue;
+            }
+
+            Entity clonedEntity =
+                (Entity)sourceEntity.Clone();
+
+            // Clone은 Reactor와 Handle은 제거하지만 XDictionary는 복제한다.
+            // 원본 파일의 사전 참조가 출력 파일로 따라오지 않게 제거한다.
+            RemoveExtendedDictionaryFromClone(clonedEntity);
+
+            cleanDocument.Entities.Add(clonedEntity);
+
+            // 치수는 원본 익명 치수 블록을 그대로 사용하지 않고,
+            // 새 문서에 연결된 뒤 현재 좌표와 스타일로 다시 생성한다.
+            if (clonedEntity is Dimension dimension)
+            {
+                dimension.UpdateBlock();
+            }
+        }
+
+        // Model Space뿐 아니라 원본의 Paper Space Layout도 새 문서에
+        // 다시 구성한다. Layout 설정, Viewport 및 Layout 내부 객체를
+        // 새 문서의 BlockRecord에 연결해 원본 Layout 탭을 유지한다.
+        CopyPaperSpaceLayouts(
+            sourceDocument,
+            cleanDocument,
+            skippedEntityTypes
+        );
+
+        if (cleanDocument.Entities.Count == 0 &&
+            sourceDocument.Entities.Count > 0)
+        {
+            throw new Exception(
+                "새 DWG로 옮길 수 있는 지원 객체가 없습니다."
+            );
+        }
+
+        if (skippedEntityTypes.Count > 0)
+        {
+            string skippedTypes = string.Join(
+                ", ",
+                skippedEntityTypes
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .OrderBy(name => name)
+            );
+
+            throw new NotSupportedException(
+                "새 DWG 재구성에서 아직 지원하지 않는 객체가 있습니다: " +
+                skippedTypes +
+                "\n객체가 누락된 도면을 저장하지 않도록 작업을 중단했습니다."
+            );
+        }
+
+        // 새 문서는 기본 화면 중심과 도면 범위가 (0, 0)에 머문다.
+        // 실제 출력 객체 범위로 갱신하지 않으면 정상 객체가 저장되어도
+        // 파일을 처음 열었을 때 빈 화면처럼 보일 수 있다.
+        UpdateCleanDocumentDisplayBounds(cleanDocument);
+
+        // 새 문서에 실제로 들어간 객체를 기준으로 CLASS 테이블을 다시
+        // 구성해 원본의 ObjectDBX/Proxy 클래스 정보가 남지 않게 한다.
+        cleanDocument.UpdateDxfClasses(true);
+
+        return cleanDocument;
+    }
+
+    /// <summary>
+    /// AC1015 새 문서에 ACadSharp가 자동으로 넣는 최신 버전용 기본
+    /// 객체를 제거한다. 현재 변환 대상에는 TABLE, MATERIAL 지정,
+    /// 주석 축척 또는 MLEADER가 없으므로 도면 형상에는 영향을 주지 않는다.
+    /// </summary>
+    private static void RemoveModernDefaultObjects(
+        CadDocument document
+    )
+    {
+        document.TableStyles?.Clear();
+        document.Materials?.Clear();
+        document.Scales?.Clear();
+        document.MLeaderStyles?.Clear();
+    }
+
+    /// <summary>
+    /// 원본의 선종류, 문자 스타일, 치수 스타일을 새 문서에 먼저 만든다.
+    /// 기본 Standard처럼 삭제할 수 없는 동명 항목은 속성을 덮어쓰고,
+    /// 그 외 항목은 Clone하여 새 테이블에 등록한다.
+    /// </summary>
+    private static void CopySourceDrawingStyles(
+        CadDocument sourceDocument,
+        CadDocument targetDocument
+    )
+    {
+        foreach (LineType sourceLineType in sourceDocument.LineTypes)
+        {
+            if (targetDocument.LineTypes.TryGetValue(
+                sourceLineType.Name,
+                out LineType targetLineType
+            ))
+            {
+                CopyScalarTableEntryProperties(
+                    sourceLineType,
+                    targetLineType
+                );
+            }
+            else
+            {
+                LineType clonedLineType =
+                    (LineType)sourceLineType.Clone();
+
+                RemoveExtendedDictionaryFromClone(clonedLineType);
+                targetDocument.LineTypes.Add(clonedLineType);
+            }
+        }
+
+        foreach (TextStyle sourceTextStyle in sourceDocument.TextStyles)
+        {
+            if (targetDocument.TextStyles.TryGetValue(
+                sourceTextStyle.Name,
+                out TextStyle targetTextStyle
+            ))
+            {
+                CopyScalarTableEntryProperties(
+                    sourceTextStyle,
+                    targetTextStyle
+                );
+            }
+            else
+            {
+                TextStyle clonedTextStyle =
+                    (TextStyle)sourceTextStyle.Clone();
+
+                RemoveExtendedDictionaryFromClone(clonedTextStyle);
+                targetDocument.TextStyles.Add(clonedTextStyle);
+            }
+        }
+
+        foreach (DimensionStyle sourceDimensionStyle in
+            sourceDocument.DimensionStyles)
+        {
+            if (targetDocument.DimensionStyles.TryGetValue(
+                sourceDimensionStyle.Name,
+                out DimensionStyle targetDimensionStyle
+            ))
+            {
+                CopyScalarTableEntryProperties(
+                    sourceDimensionStyle,
+                    targetDimensionStyle
+                );
+
+                ReconnectDimensionStyleReferences(
+                    sourceDimensionStyle,
+                    targetDimensionStyle,
+                    targetDocument
+                );
+            }
+            else
+            {
+                DimensionStyle clonedDimensionStyle =
+                    (DimensionStyle)sourceDimensionStyle.Clone();
+
+                RemoveExtendedDictionaryFromClone(
+                    clonedDimensionStyle
+                );
+                ReconnectDimensionStyleReferences(
+                    sourceDimensionStyle,
+                    clonedDimensionStyle,
+                    targetDocument
+                );
+                targetDocument.DimensionStyles.Add(
+                    clonedDimensionStyle
+                );
+            }
+        }
+    }
+
+    /// <summary>
+    /// Handle, Owner 및 다른 CAD 객체 참조를 제외한 공개 설정값을
+    /// 동명 기본 스타일에 복사한다.
+    /// </summary>
+    private static void CopyScalarTableEntryProperties(
+        TableEntry sourceEntry,
+        TableEntry targetEntry
+    )
+    {
+        HashSet<string> excludedProperties = new(
+            StringComparer.Ordinal
+        )
+        {
+            "Document",
+            "Handle",
+            "Name",
+            "ObjectName",
+            "ObjectType",
+            "Owner",
+            "SubclassMarker"
+        };
+
+        foreach (PropertyInfo property in
+            sourceEntry.GetType().GetProperties(
+                BindingFlags.Instance | BindingFlags.Public
+            ))
+        {
+            if (!property.CanRead ||
+                !property.CanWrite ||
+                property.GetIndexParameters().Length > 0 ||
+                excludedProperties.Contains(property.Name) ||
+                typeof(CadObject).IsAssignableFrom(
+                    property.PropertyType
+                ))
+            {
+                continue;
+            }
+
+            try
+            {
+                object? value = property.GetValue(sourceEntry);
+                property.SetValue(targetEntry, value);
+            }
+            catch
+            {
+                // 버전별 계산 속성이나 유효 범위가 다른 값은 건너뛰고
+                // 나머지 스타일 설정을 계속 복사한다.
+            }
+        }
+    }
+
+    private static void ReconnectDimensionStyleReferences(
+        DimensionStyle sourceStyle,
+        DimensionStyle targetStyle,
+        CadDocument targetDocument
+    )
+    {
+        if (sourceStyle.Style != null &&
+            targetDocument.TextStyles.TryGetValue(
+                sourceStyle.Style.Name,
+                out TextStyle textStyle
+            ))
+        {
+            targetStyle.Style = textStyle;
+        }
+
+        targetStyle.LineType = ResolveLineType(
+            sourceStyle.LineType,
+            targetDocument
+        );
+        targetStyle.LineTypeExt1 = ResolveLineType(
+            sourceStyle.LineTypeExt1,
+            targetDocument
+        );
+        targetStyle.LineTypeExt2 = ResolveLineType(
+            sourceStyle.LineTypeExt2,
+            targetDocument
+        );
+
+        targetStyle.LeaderArrow = ResolveDimensionArrowBlock(
+            sourceStyle.LeaderArrow,
+            targetDocument
+        );
+        targetStyle.ArrowBlock = ResolveDimensionArrowBlock(
+            sourceStyle.ArrowBlock,
+            targetDocument
+        );
+        targetStyle.DimArrow1 = ResolveDimensionArrowBlock(
+            sourceStyle.DimArrow1,
+            targetDocument
+        );
+        targetStyle.DimArrow2 = ResolveDimensionArrowBlock(
+            sourceStyle.DimArrow2,
+            targetDocument
+        );
+    }
+
+    private static LineType? ResolveLineType(
+        LineType? sourceLineType,
+        CadDocument targetDocument
+    )
+    {
+        if (sourceLineType == null)
+        {
+            return null;
+        }
+
+        return targetDocument.LineTypes.TryGetValue(
+            sourceLineType.Name,
+            out LineType targetLineType
+        )
+            ? targetLineType
+            : null;
+    }
+
+    private static BlockRecord? ResolveDimensionArrowBlock(
+        BlockRecord? sourceBlock,
+        CadDocument targetDocument
+    )
+    {
+        if (sourceBlock == null)
+        {
+            return null;
+        }
+
+        if (targetDocument.BlockRecords.TryGetValue(
+            sourceBlock.Name,
+            out BlockRecord targetBlock
+        ))
+        {
+            return targetBlock;
+        }
+
+        BlockRecord clonedBlock =
+            (BlockRecord)sourceBlock.Clone();
+
+        RemoveExtendedDictionaryFromClone(clonedBlock);
+
+        foreach (Entity entity in clonedBlock.Entities)
+        {
+            RemoveExtendedDictionaryFromClone(entity);
+        }
+
+        targetDocument.BlockRecords.Add(clonedBlock);
+        return clonedBlock;
+    }
+
+    /// <summary>
+    /// 원본의 모든 Paper Space Layout을 새 문서에 재구성한다.
+    /// 기본 *Paper_Space Layout은 새 문서의 기본 Layout을 재사용하고,
+    /// 나머지는 각각 새 Layout과 BlockRecord로 생성한다.
+    /// </summary>
+    private static void CopyPaperSpaceLayouts(
+        CadDocument sourceDocument,
+        CadDocument targetDocument,
+        List<string> skippedEntityTypes
+    )
+    {
+        if (sourceDocument.Layouts == null ||
+            targetDocument.Layouts == null)
+        {
+            return;
+        }
+
+        List<Layout> sourcePaperLayouts =
+            sourceDocument.Layouts
+                .Where(layout => layout.IsPaperSpace)
+                .OrderBy(layout => layout.TabOrder)
+                .ToList();
+
+        if (sourcePaperLayouts.Count == 0)
+        {
+            return;
+        }
+
+        Layout sourcePrimaryLayout =
+            sourcePaperLayouts.FirstOrDefault(layout =>
+                string.Equals(
+                    layout.AssociatedBlock?.Name,
+                    BlockRecord.PaperSpaceName,
+                    StringComparison.OrdinalIgnoreCase
+                )
+            ) ?? sourcePaperLayouts[0];
+
+        Layout targetPrimaryLayout =
+            targetDocument.PaperSpace.Layout
+            ?? throw new Exception(
+                "새 DWG의 기본 Paper Space Layout을 찾지 못했습니다."
+            );
+
+        CopySinglePaperSpaceLayout(
+            sourcePrimaryLayout,
+            targetPrimaryLayout,
+            targetDocument,
+            skippedEntityTypes,
+            false
+        );
+
+        foreach (Layout sourceLayout in sourcePaperLayouts)
+        {
+            if (ReferenceEquals(sourceLayout, sourcePrimaryLayout))
+            {
+                continue;
+            }
+
+            string blockName = sourceLayout.AssociatedBlock?.Name
+                ?? throw new Exception(
+                    $"Layout '{sourceLayout.Name}'의 Paper Space 블록을 찾지 못했습니다."
+                );
+
+            if (targetDocument.BlockRecords.Contains(blockName))
+            {
+                throw new Exception(
+                    $"Layout '{sourceLayout.Name}'의 블록 이름이 중복됩니다: " +
+                    blockName
+                );
+            }
+
+            Layout targetLayout = new(
+                sourceLayout.Name,
+                blockName
+            );
+
+            CopySinglePaperSpaceLayout(
+                sourceLayout,
+                targetLayout,
+                targetDocument,
+                skippedEntityTypes,
+                true
+            );
+        }
+    }
+
+    private static void CopySinglePaperSpaceLayout(
+        Layout sourceLayout,
+        Layout targetLayout,
+        CadDocument targetDocument,
+        List<string> skippedEntityTypes,
+        bool addLayoutToDocument
+    )
+    {
+        CopyWritableLayoutProperties(
+            sourceLayout,
+            targetLayout
+        );
+
+        RemoveExtendedDictionaryFromClone(targetLayout);
+        RemoveExtendedDictionaryFromClone(
+            targetLayout.AssociatedBlock
+        );
+
+        targetLayout.AssociatedBlock.Entities.Clear();
+
+        foreach (Entity sourceEntity in
+            sourceLayout.AssociatedBlock.Entities)
+        {
+            if (!IsSupportedCleanOutputEntity(sourceEntity))
+            {
+                skippedEntityTypes.Add(
+                    $"Layout {sourceLayout.Name}: {sourceEntity.ObjectName}"
+                );
+                continue;
+            }
+
+            Entity clonedEntity =
+                (Entity)sourceEntity.Clone();
+
+            RemoveExtendedDictionaryFromClone(clonedEntity);
+            targetLayout.AssociatedBlock.Entities.Add(clonedEntity);
+        }
+
+        if (addLayoutToDocument)
+        {
+            targetDocument.Layouts.Add(targetLayout);
+        }
+
+        foreach (Dimension dimension in
+            targetLayout.AssociatedBlock.Entities.OfType<Dimension>())
+        {
+            dimension.UpdateBlock();
+        }
+
+        RestoreLastActiveLayoutViewport(
+            sourceLayout,
+            targetLayout
+        );
+    }
+
+    /// <summary>
+    /// Layout과 PlotSettings의 단순 설정값만 복사한다.
+    /// 문서·Owner·Block·Viewport·UCS 참조는 새 문서에서 다시 연결한다.
+    /// </summary>
+    private static void CopyWritableLayoutProperties(
+        Layout sourceLayout,
+        Layout targetLayout
+    )
+    {
+        HashSet<string> excludedProperties = new(
+            StringComparer.Ordinal
+        )
+        {
+            "AssociatedBlock",
+            "BaseUCS",
+            "Document",
+            "Handle",
+            "IsPaperSpace",
+            "LastActiveViewport",
+            "ObjectName",
+            "ObjectType",
+            "Owner",
+            "PaperViewport",
+            "SubclassMarker",
+            "UCS",
+            "Viewports"
+        };
+
+        foreach (PropertyInfo property in
+            typeof(Layout).GetProperties(
+                BindingFlags.Instance | BindingFlags.Public
+            ))
+        {
+            if (!property.CanRead ||
+                !property.CanWrite ||
+                property.GetIndexParameters().Length > 0 ||
+                excludedProperties.Contains(property.Name))
+            {
+                continue;
+            }
+
+            try
+            {
+                object? value = property.GetValue(sourceLayout);
+                property.SetValue(targetLayout, value);
+            }
+            catch
+            {
+                // 라이브러리 버전에 따라 읽기 전용에 가까운 계산 속성이
+                // 포함될 수 있으므로 복사 가능한 Layout 설정만 유지한다.
+            }
+        }
+    }
+
+    private static void RestoreLastActiveLayoutViewport(
+        Layout sourceLayout,
+        Layout targetLayout
+    )
+    {
+        List<Viewport> sourceViewports =
+            sourceLayout.Viewports?.ToList()
+            ?? new List<Viewport>();
+        List<Viewport> targetViewports =
+            targetLayout.Viewports?.ToList()
+            ?? new List<Viewport>();
+
+        if (targetViewports.Count == 0)
+        {
+            return;
+        }
+
+        int sourceIndex = sourceLayout.LastActiveViewport == null
+            ? 0
+            : sourceViewports.FindIndex(viewport =>
+                ReferenceEquals(
+                    viewport,
+                    sourceLayout.LastActiveViewport
+                ) ||
+                viewport.Handle ==
+                    sourceLayout.LastActiveViewport.Handle
+            );
+
+        if (sourceIndex < 0 || sourceIndex >= targetViewports.Count)
+        {
+            sourceIndex = 0;
+        }
+
+        FieldInfo? lastViewportField =
+            typeof(Layout).GetField(
+                "_lastViewport",
+                BindingFlags.Instance | BindingFlags.NonPublic
+            );
+
+        lastViewportField?.SetValue(
+            targetLayout,
+            targetViewports[sourceIndex]
+        );
+    }
+
+    /// <summary>
+    /// 새 문서의 Model Space 범위와 활성 뷰를 실제 객체 위치에 맞춘다.
+    /// 활성 뷰 속성은 ACadSharp 버전에 따라 이름/노출 방식이 달라질 수
+    /// 있어, 존재하는 속성만 반영하고 없어도 저장 자체는 계속한다.
+    /// </summary>
+    private static void UpdateCleanDocumentDisplayBounds(
+        CadDocument document
+    )
+    {
+        bool hasBounds = false;
+        double minX = 0.0;
+        double minY = 0.0;
+        double minZ = 0.0;
+        double maxX = 0.0;
+        double maxY = 0.0;
+        double maxZ = 0.0;
+
+        foreach (Entity entity in document.Entities)
+        {
+            try
+            {
+                var box = entity.GetBoundingBox();
+
+                if (!double.IsFinite(box.Min.X) ||
+                    !double.IsFinite(box.Min.Y) ||
+                    !double.IsFinite(box.Min.Z) ||
+                    !double.IsFinite(box.Max.X) ||
+                    !double.IsFinite(box.Max.Y) ||
+                    !double.IsFinite(box.Max.Z))
+                {
+                    continue;
+                }
+
+                if (!hasBounds)
+                {
+                    minX = box.Min.X;
+                    minY = box.Min.Y;
+                    minZ = box.Min.Z;
+                    maxX = box.Max.X;
+                    maxY = box.Max.Y;
+                    maxZ = box.Max.Z;
+                    hasBounds = true;
+                    continue;
+                }
+
+                minX = Math.Min(minX, box.Min.X);
+                minY = Math.Min(minY, box.Min.Y);
+                minZ = Math.Min(minZ, box.Min.Z);
+                maxX = Math.Max(maxX, box.Max.X);
+                maxY = Math.Max(maxY, box.Max.Y);
+                maxZ = Math.Max(maxZ, box.Max.Z);
+            }
+            catch
+            {
+                // 일부 객체가 바운딩박스를 지원하지 않아도 다른 객체의
+                // 유효한 범위로 초기 화면을 구성한다.
+            }
+        }
+
+        if (!hasBounds)
+        {
+            return;
+        }
+
+        document.Header.ModelSpaceExtMin =
+            new XYZ(minX, minY, minZ);
+        document.Header.ModelSpaceExtMax =
+            new XYZ(maxX, maxY, maxZ);
+
+        double width = Math.Max(maxX - minX, 1.0);
+        double height = Math.Max(maxY - minY, 1.0);
+        double centerX = (minX + maxX) / 2.0;
+        double centerY = (minY + maxY) / 2.0;
+
+        UpdateActiveModelView(
+            document,
+            centerX,
+            centerY,
+            width * 1.10,
+            height * 1.10
+        );
+    }
+
+    private static void UpdateActiveModelView(
+        CadDocument document,
+        double centerX,
+        double centerY,
+        double viewWidth,
+        double viewHeight
+    )
+    {
+        try
+        {
+            PropertyInfo? vPortsProperty =
+                typeof(CadDocument).GetProperty("VPorts");
+
+            if (vPortsProperty?.GetValue(document) is not
+                System.Collections.IEnumerable vPorts)
+            {
+                return;
+            }
+
+            object? activeVPort = null;
+
+            foreach (object? vPort in vPorts)
+            {
+                if (vPort == null)
+                {
+                    continue;
+                }
+
+                string? name = vPort.GetType()
+                    .GetProperty("Name")?
+                    .GetValue(vPort) as string;
+
+                if (string.Equals(
+                    name,
+                    "*Active",
+                    StringComparison.OrdinalIgnoreCase
+                ))
+                {
+                    activeVPort = vPort;
+                    break;
+                }
+
+                activeVPort ??= vPort;
+            }
+
+            if (activeVPort == null)
+            {
+                return;
+            }
+
+            SetWritablePropertyIfCompatible(
+                activeVPort,
+                "ViewCenter",
+                new XY(centerX, centerY)
+            );
+            SetWritablePropertyIfCompatible(
+                activeVPort,
+                "ViewHeight",
+                viewHeight
+            );
+            SetWritablePropertyIfCompatible(
+                activeVPort,
+                "ViewWidth",
+                viewWidth
+            );
+            SetWritablePropertyIfCompatible(
+                activeVPort,
+                "AspectRatio",
+                viewWidth / viewHeight
+            );
+        }
+        catch
+        {
+            // 뷰 정보는 표시 편의를 위한 값이다. 사용하는 ACadSharp
+            // 버전에 해당 속성이 없더라도 객체와 DWG 저장은 유지한다.
+        }
+    }
+
+    private static void SetWritablePropertyIfCompatible(
+        object target,
+        string propertyName,
+        object value
+    )
+    {
+        PropertyInfo? property = target.GetType().GetProperty(
+            propertyName,
+            BindingFlags.Instance | BindingFlags.Public
+        );
+
+        if (property?.CanWrite == true &&
+            property.PropertyType.IsInstanceOfType(value))
+        {
+            property.SetValue(target, value);
+        }
+    }
+
+    /// <summary>
+    /// 현재 프로그램이 읽고 이동·크기 변경할 수 있는 출력 객체만 허용한다.
+    /// 지원하지 않는 Proxy, Hatch, Underlay 등을 그대로 복사하지 않아
+    /// 원본의 잘못된 외부 참조가 새 DWG에 유입되는 것을 막는다.
+    /// </summary>
+    private static bool IsSupportedCleanOutputEntity(
+        Entity entity
+    )
+    {
+        return entity is Line or
+            Arc or
+            Circle or
+            LwPolyline or
+            Polyline2D or
+            TextEntity or
+            MText or
+            Dimension or
+            Insert or
+            Viewport;
+    }
+
+    /// <summary>
+    /// ACadSharp의 CadObject.Clone()이 함께 복제하는 XDictionary를 제거한다.
+    /// 해당 속성의 setter가 internal이므로 private 필드를 안전하게 찾아
+    /// 존재할 때만 비운다. 라이브러리 구현이 달라 필드가 없으면 건너뛴다.
+    /// </summary>
+    private static void RemoveExtendedDictionaryFromClone(
+        CadObject clonedObject
+    )
+    {
+        FieldInfo? dictionaryField = typeof(CadObject).GetField(
+            "_xdictionary",
+            BindingFlags.Instance | BindingFlags.NonPublic
+        );
+
+        dictionaryField?.SetValue(clonedObject, null);
+
+        if (clonedObject is Dimension dimension &&
+            dimension.Block != null)
+        {
+            dictionaryField?.SetValue(dimension.Block, null);
+
+            foreach (Entity blockEntity in dimension.Block.Entities)
+            {
+                dictionaryField?.SetValue(blockEntity, null);
+            }
+        }
+
+        if (clonedObject is Insert insert &&
+            insert.Block != null)
+        {
+            dictionaryField?.SetValue(insert.Block, null);
+
+            foreach (Entity blockEntity in insert.Block.Entities)
+            {
+                dictionaryField?.SetValue(blockEntity, null);
+            }
+        }
     }
 
     private static string GetAvailableOutputPath(string desiredPath)
@@ -5179,6 +6423,6 @@ internal static class Program_V2
                 : 2.0;
 
         return ratio >= minimumAspectRatio &&
-               ratio < 10.0;
+               ratio < 11.0;
     }
 }
