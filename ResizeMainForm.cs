@@ -23,6 +23,9 @@ internal sealed class ResizeMainForm : Form
     private static readonly Color PrimaryColor = Color.FromArgb(42, 103, 209);
     private static readonly Color SecondaryTextColor = Color.FromArgb(92, 101, 116);
     private string _manualOutputPath = string.Empty;
+    private readonly Dictionary<string, List<DwgLayoutSizeSnapshot>>
+        _layoutSizesByFilePath = new(StringComparer.OrdinalIgnoreCase);
+    private readonly List<LayoutSizeInputRow> _layoutSizeInputRows = new();
 
     private static string UiStateSettingsFile => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -49,6 +52,8 @@ internal sealed class ResizeMainForm : Form
     public TextBox ConversionWidthTextBox { get; }
     public TextBox ConversionHeightTextBox { get; }
     public TextBox ConversionThicknessTextBox { get; }
+    public TableLayoutPanel LayoutSizeRowsTable { get; }
+    public CheckBox AdvancedSettingsEditCheckBox { get; }
 
     public DataGridView InputFilesGrid { get; }
     public DataGridView TargetFilesGrid { get; }
@@ -108,7 +113,7 @@ internal sealed class ResizeMainForm : Form
             RowCount = 1
         };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 220F));
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 280F));
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
         root.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
 
@@ -248,11 +253,15 @@ internal sealed class ResizeMainForm : Form
             out TextBox conversionWidth,
             out TextBox conversionHeight,
             out TextBox conversionThickness,
+            out TableLayoutPanel layoutSizeRowsTable,
+            out CheckBox advancedSettingsEditCheckBox,
             out Button saveCurrentState
         );
         ConversionWidthTextBox = conversionWidth;
         ConversionHeightTextBox = conversionHeight;
         ConversionThicknessTextBox = conversionThickness;
+        LayoutSizeRowsTable = layoutSizeRowsTable;
+        AdvancedSettingsEditCheckBox = advancedSettingsEditCheckBox;
         SaveCurrentStateButton = saveCurrentState;
 
         Panel inputGridPanel = CreateGridPanel(
@@ -305,6 +314,8 @@ internal sealed class ResizeMainForm : Form
         AddFilesButton.Click += AddFilesButton_Click;
         MoveSelectedButton.Click += MoveSelectedButton_Click;
         SaveCurrentStateButton.Click += SaveCurrentStateButton_Click;
+        AdvancedSettingsEditCheckBox.CheckedChanged +=
+            AdvancedSettingsEditCheckBox_CheckedChanged;
         InputFilesGrid.SelectionChanged += InputFilesGrid_SelectionChanged;
         TargetFilesGrid.SelectionChanged += TargetFilesGrid_SelectionChanged;
         TargetFilesGrid.CellMouseDoubleClick +=
@@ -368,6 +379,8 @@ internal sealed class ResizeMainForm : Form
         out TextBox widthTextBox,
         out TextBox heightTextBox,
         out TextBox thicknessTextBox,
+        out TableLayoutPanel layoutSizeRowsTable,
+        out CheckBox advancedSettingsEditCheckBox,
         out Button saveCurrentStateButton
     )
     {
@@ -382,13 +395,18 @@ internal sealed class ResizeMainForm : Form
         {
             Dock = DockStyle.Fill,
             ColumnCount = 1,
-            RowCount = 6,
+            RowCount = 7,
             BackColor = WindowBackground
         };
         layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100F));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 58F));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 180F));
+        RowStyle layoutSizeRowStyle = new(
+            SizeType.Absolute,
+            220F
+        );
+        layout.RowStyles.Add(layoutSizeRowStyle);
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 72F));
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 34F));
         layout.RowStyles.Add(new RowStyle(SizeType.Percent, 50F));
@@ -398,6 +416,26 @@ internal sealed class ResizeMainForm : Form
             out heightTextBox,
             out thicknessTextBox
         );
+        Panel layoutSizePanel = CreateLayoutSizePanel(
+            out layoutSizeRowsTable,
+            out Button layoutSizeToggleButton,
+            out advancedSettingsEditCheckBox,
+            out Panel layoutSizeContentPanel
+        );
+
+        bool layoutSizeCollapsed = false;
+        layoutSizeToggleButton.Click += (_, _) =>
+        {
+            layoutSizeCollapsed = !layoutSizeCollapsed;
+            layoutSizeContentPanel.Visible = !layoutSizeCollapsed;
+            layoutSizeRowStyle.Height = layoutSizeCollapsed
+                ? 52F
+                : 220F;
+            layoutSizeToggleButton.Text = layoutSizeCollapsed
+                ? "▶ 고급 설정"
+                : "▼ 고급 설정";
+            layout.PerformLayout();
+        };
 
         saveCurrentStateButton = CreatePrimaryButton("현재값 저장");
         saveCurrentStateButton.Dock = DockStyle.Fill;
@@ -405,10 +443,184 @@ internal sealed class ResizeMainForm : Form
 
         layout.Controls.Add(saveCurrentStateButton, 0, 1);
         layout.Controls.Add(sizeInputPanel, 0, 2);
-        layout.Controls.Add(convertButton, 0, 3);
-        layout.Controls.Add(convertLabel, 0, 4);
+        layout.Controls.Add(layoutSizePanel, 0, 3);
+        layout.Controls.Add(convertButton, 0, 4);
+        layout.Controls.Add(convertLabel, 0, 5);
         panel.Controls.Add(layout);
         return panel;
+    }
+
+    private static Panel CreateLayoutSizePanel(
+        out TableLayoutPanel layoutSizeRowsTable,
+        out Button layoutSizeToggleButton,
+        out CheckBox advancedSettingsEditCheckBox,
+        out Panel layoutSizeContentPanel
+    )
+    {
+        Panel panel = new()
+        {
+            Dock = DockStyle.Fill,
+            BackColor = CardBackground,
+            BorderStyle = BorderStyle.FixedSingle,
+            Padding = new Padding(6, 4, 6, 6),
+            Margin = new Padding(6, 4, 6, 4)
+        };
+
+        TableLayoutPanel layout = new()
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 2
+        };
+        layout.ColumnStyles.Add(
+            new ColumnStyle(SizeType.Percent, 100F)
+        );
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 32F));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+        TableLayoutPanel titleLayout = new()
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 1,
+            Margin = new Padding(0)
+        };
+        titleLayout.ColumnStyles.Add(
+            new ColumnStyle(SizeType.Percent, 100F)
+        );
+        titleLayout.ColumnStyles.Add(
+            new ColumnStyle(SizeType.Absolute, 62F)
+        );
+        titleLayout.RowStyles.Add(
+            new RowStyle(SizeType.Percent, 100F)
+        );
+
+        layoutSizeToggleButton = new Button
+        {
+            Text = "▼ 고급 설정",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = CardBackground,
+            ForeColor = Color.FromArgb(31, 41, 55),
+            Font = new Font(
+                "Segoe UI",
+                9.5F,
+                FontStyle.Bold,
+                GraphicsUnit.Point
+            ),
+            Cursor = Cursors.Hand,
+            Margin = new Padding(0)
+        };
+        layoutSizeToggleButton.FlatAppearance.BorderSize = 0;
+
+        advancedSettingsEditCheckBox = new CheckBox
+        {
+            Text = "수정",
+            Checked = false,
+            AutoSize = false,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleCenter,
+            CheckAlign = ContentAlignment.MiddleLeft,
+            Margin = new Padding(0),
+            Cursor = Cursors.Hand
+        };
+
+        titleLayout.Controls.Add(layoutSizeToggleButton, 0, 0);
+        titleLayout.Controls.Add(advancedSettingsEditCheckBox, 1, 0);
+
+        layoutSizeContentPanel = new Panel
+        {
+            Dock = DockStyle.Fill,
+            BackColor = CardBackground,
+            Margin = new Padding(0)
+        };
+
+        TableLayoutPanel contentLayout = new()
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 1,
+            Margin = new Padding(0)
+        };
+        contentLayout.ColumnStyles.Add(
+            new ColumnStyle(SizeType.Percent, 100F)
+        );
+        contentLayout.RowStyles.Add(
+            new RowStyle(SizeType.Percent, 100F)
+        );
+
+        layoutSizeRowsTable = CreateLayoutSizeGridLayout();
+        layoutSizeRowsTable.Dock = DockStyle.Fill;
+        layoutSizeRowsTable.AutoScroll = true;
+        layoutSizeRowsTable.GrowStyle = TableLayoutPanelGrowStyle.AddRows;
+
+        Label initialMessage = CreateLayoutMessageLabel(
+            "DWG 파일을 선택하세요."
+        );
+        layoutSizeRowsTable.RowCount = 1;
+        layoutSizeRowsTable.RowStyles.Add(
+            new RowStyle(SizeType.Absolute, 30F)
+        );
+        layoutSizeRowsTable.Controls.Add(initialMessage, 0, 0);
+        layoutSizeRowsTable.SetColumnSpan(initialMessage, 6);
+
+        contentLayout.Controls.Add(layoutSizeRowsTable, 0, 0);
+        layoutSizeContentPanel.Controls.Add(contentLayout);
+
+        layout.Controls.Add(titleLayout, 0, 0);
+        layout.Controls.Add(layoutSizeContentPanel, 0, 1);
+        panel.Controls.Add(layout);
+        return panel;
+    }
+
+    private static TableLayoutPanel CreateLayoutSizeGridLayout()
+    {
+        TableLayoutPanel layout = new()
+        {
+            ColumnCount = 6,
+            RowCount = 0,
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+            BackColor = CardBackground
+        };
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 62F));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 14F));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 14F));
+        layout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 33.333F));
+        return layout;
+    }
+
+    private static Label CreateLayoutHeaderLabel(string text)
+    {
+        return new Label
+        {
+            Text = text,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleCenter,
+            ForeColor = SecondaryTextColor,
+            Font = new Font(
+                "Segoe UI",
+                8.5F,
+                FontStyle.Regular,
+                GraphicsUnit.Point
+            ),
+            Margin = new Padding(0)
+        };
+    }
+
+    private static Label CreateLayoutMessageLabel(string text)
+    {
+        return new Label
+        {
+            Text = text,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleCenter,
+            ForeColor = SecondaryTextColor,
+            Margin = new Padding(0)
+        };
     }
 
     private static Panel CreateConversionSizeInputPanel(
@@ -837,11 +1049,12 @@ internal sealed class ResizeMainForm : Form
         }
     }
 
-    private static void ApplySizeToGridRow(
+    private void ApplySizeToGridRow(
         DataGridViewRow row,
         DwgFileSizeSnapshot size
     )
     {
+        CacheLayoutSizes(size);
         row.Cells["Width"].Value = FormatValue(size.Width);
         row.Cells["Height"].Value = FormatValue(size.Height);
         row.Cells["Thickness"].Value =
@@ -978,7 +1191,7 @@ internal sealed class ResizeMainForm : Form
         }
     }
 
-    private static List<UiSavedFileRow> CaptureGridRows(DataGridView grid)
+    private List<UiSavedFileRow> CaptureGridRows(DataGridView grid)
     {
         List<UiSavedFileRow> result = new();
         string? currentFolderPath = null;
@@ -1016,14 +1229,15 @@ internal sealed class ResizeMainForm : Form
                 Thickness = GetCellText(row, "Thickness"),
                 ModifiedTime = grid.Columns.Contains("ModifiedTime")
                     ? GetCellText(row, "ModifiedTime")
-                    : string.Empty
+                    : string.Empty,
+                LayoutSizes = GetCachedLayoutSizes(row.Tag as string)
             });
         }
 
         return result;
     }
 
-    private static void RestoreGridRows(
+    private void RestoreGridRows(
         DataGridView grid,
         IEnumerable<UiSavedFileRow>? savedRows
     )
@@ -1064,6 +1278,13 @@ internal sealed class ResizeMainForm : Form
             );
             DataGridViewRow restoredRow = grid.Rows[rowIndex];
             restoredRow.Tag = savedRow.FilePath;
+
+            if (!string.IsNullOrWhiteSpace(savedRow.FilePath) &&
+                savedRow.LayoutSizes != null)
+            {
+                _layoutSizesByFilePath[savedRow.FilePath] =
+                    savedRow.LayoutSizes;
+            }
 
             if (grid.Columns.Contains("ModifiedTime"))
             {
@@ -1342,6 +1563,7 @@ internal sealed class ResizeMainForm : Form
             try
             {
                 DwgFileSizeSnapshot size = AnalyzeDwgFile(filePath);
+                CacheLayoutSizes(size);
 
                 DataGridViewRow inputRow;
 
@@ -1467,6 +1689,7 @@ internal sealed class ResizeMainForm : Form
         DwgFileSizeSnapshot size
     )
     {
+        CacheLayoutSizes(size);
         int insertIndex = folderHeaderRow.Index + 1;
 
         while (insertIndex < InputFilesGrid.Rows.Count &&
@@ -1617,6 +1840,7 @@ internal sealed class ResizeMainForm : Form
         CurrentWidthTextBox.Text = GetCellText(row, "Width");
         CurrentHeightTextBox.Text = GetCellText(row, "Height");
         CurrentThicknessTextBox.Text = GetCellText(row, "Thickness");
+        SetLayoutSizeDisplay(row.Tag as string);
         SetConversionSizeBoxes(row);
     }
 
@@ -1987,6 +2211,7 @@ internal sealed class ResizeMainForm : Form
         double targetWidth;
         double targetHeight;
         double? targetThickness;
+        List<DwgLayoutResizeTarget> layoutTargets;
 
         try
         {
@@ -2002,6 +2227,7 @@ internal sealed class ResizeMainForm : Form
                 ConversionThicknessTextBox.Text.Trim(),
                 "목표 두께"
             );
+            layoutTargets = ReadAdvancedLayoutTargets();
         }
         catch (Exception ex)
         {
@@ -2062,7 +2288,10 @@ internal sealed class ResizeMainForm : Form
                             OutputDirectory = outputDirectory,
                             TargetWidth = targetWidth,
                             TargetHeight = targetHeight,
-                            TargetThickness = targetThickness
+                            TargetThickness = targetThickness,
+                            UseLayoutSpecificResize =
+                                AdvancedSettingsEditCheckBox.Checked,
+                            LayoutTargets = layoutTargets
                         }
                     );
 
@@ -2117,9 +2346,296 @@ internal sealed class ResizeMainForm : Form
         DwgFileSizeSnapshot size
     )
     {
+        CacheLayoutSizes(size);
         CurrentWidthTextBox.Text = FormatValue(size.Width);
         CurrentHeightTextBox.Text = FormatValue(size.Height);
         CurrentThicknessTextBox.Text = FormatNullableValue(size.Thickness);
+        SetLayoutSizeDisplay(size.FilePath);
+    }
+
+    private void CacheLayoutSizes(DwgFileSizeSnapshot size)
+    {
+        if (string.IsNullOrWhiteSpace(size.FilePath))
+        {
+            return;
+        }
+
+        _layoutSizesByFilePath[size.FilePath] = size.LayoutSizes
+            .Select(item => new DwgLayoutSizeSnapshot
+            {
+                LayoutName = item.LayoutName,
+                Sequence = item.Sequence,
+                Width = item.Width,
+                Height = item.Height,
+                Thickness = item.Thickness
+            })
+            .ToList();
+    }
+
+    private List<DwgLayoutSizeSnapshot>? GetCachedLayoutSizes(
+        string? filePath
+    )
+    {
+        if (string.IsNullOrWhiteSpace(filePath) ||
+            !_layoutSizesByFilePath.TryGetValue(filePath, out var sizes))
+        {
+            return null;
+        }
+
+        return sizes
+            .Select(item => new DwgLayoutSizeSnapshot
+            {
+                LayoutName = item.LayoutName,
+                Sequence = item.Sequence,
+                Width = item.Width,
+                Height = item.Height,
+                Thickness = item.Thickness
+            })
+            .ToList();
+    }
+
+    private void SetLayoutSizeDisplay(string? filePath)
+    {
+        LayoutSizeRowsTable.SuspendLayout();
+
+        try
+        {
+            LayoutSizeRowsTable.Controls.Clear();
+            LayoutSizeRowsTable.RowStyles.Clear();
+            LayoutSizeRowsTable.RowCount = 0;
+            _layoutSizeInputRows.Clear();
+
+            if (string.IsNullOrWhiteSpace(filePath))
+            {
+                AddLayoutMessageRow("DWG 파일을 선택하세요.");
+                return;
+            }
+
+            if (!_layoutSizesByFilePath.TryGetValue(
+                    filePath,
+                    out var sizes
+                ) || sizes.Count == 0)
+            {
+                AddLayoutMessageRow("노란 레이아웃 박스 없음");
+                return;
+            }
+
+            Dictionary<string, int> counts = sizes
+                .GroupBy(
+                    item => item.LayoutName,
+                    StringComparer.OrdinalIgnoreCase
+                )
+                .ToDictionary(
+                    group => group.Key,
+                    group => group.Count(),
+                    StringComparer.OrdinalIgnoreCase
+                );
+
+            foreach (DwgLayoutSizeSnapshot size in sizes)
+            {
+                string displayName = counts[size.LayoutName] > 1
+                    ? $"{size.LayoutName} {size.Sequence}"
+                    : size.LayoutName;
+
+                AddLayoutInputRow(
+                    size,
+                    displayName
+                );
+            }
+        }
+        finally
+        {
+            LayoutSizeRowsTable.ResumeLayout(true);
+        }
+    }
+
+    private void AddLayoutMessageRow(string message)
+    {
+        int rowIndex = LayoutSizeRowsTable.RowCount++;
+        LayoutSizeRowsTable.RowStyles.Add(
+            new RowStyle(SizeType.Absolute, 30F)
+        );
+
+        Label label = CreateLayoutMessageLabel(message);
+        LayoutSizeRowsTable.Controls.Add(label, 0, rowIndex);
+        LayoutSizeRowsTable.SetColumnSpan(label, 6);
+    }
+
+    private void AddLayoutInputRow(
+        DwgLayoutSizeSnapshot size,
+        string displayName
+    )
+    {
+        int rowIndex = LayoutSizeRowsTable.RowCount++;
+        LayoutSizeRowsTable.RowStyles.Add(
+            new RowStyle(SizeType.Absolute, 31F)
+        );
+
+        Label nameLabel = new()
+        {
+            Text = displayName,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true,
+            Margin = new Padding(0)
+        };
+
+        TextBox widthInput = CreateLayoutSizeInput(
+            FormatValue(size.Width)
+        );
+        TextBox heightInput = CreateLayoutSizeInput(
+            FormatValue(size.Height)
+        );
+        TextBox thicknessInput = CreateLayoutSizeInput(
+            FormatNullableValue(size.Thickness)
+        );
+
+        _layoutSizeInputRows.Add(new LayoutSizeInputRow
+        {
+            LayoutName = size.LayoutName,
+            Sequence = size.Sequence,
+            DisplayName = displayName,
+            OriginalWidth = size.Width,
+            OriginalHeight = size.Height,
+            OriginalThickness = size.Thickness,
+            WidthTextBox = widthInput,
+            HeightTextBox = heightInput,
+            ThicknessTextBox = thicknessInput
+        });
+
+        LayoutSizeRowsTable.Controls.Add(nameLabel, 0, rowIndex);
+        LayoutSizeRowsTable.Controls.Add(widthInput, 1, rowIndex);
+        LayoutSizeRowsTable.Controls.Add(
+            CreateLayoutHeaderLabel("×"),
+            2,
+            rowIndex
+        );
+        LayoutSizeRowsTable.Controls.Add(heightInput, 3, rowIndex);
+        LayoutSizeRowsTable.Controls.Add(
+            CreateLayoutHeaderLabel("×"),
+            4,
+            rowIndex
+        );
+        LayoutSizeRowsTable.Controls.Add(thicknessInput, 5, rowIndex);
+    }
+
+    private void AdvancedSettingsEditCheckBox_CheckedChanged(
+        object? sender,
+        EventArgs e
+    )
+    {
+        foreach (TextBox input in LayoutSizeRowsTable.Controls
+            .OfType<TextBox>())
+        {
+            bool hasValue = input.Tag is bool valueExists &&
+                            valueExists;
+            bool canEdit = AdvancedSettingsEditCheckBox.Checked &&
+                           hasValue;
+
+            input.Enabled = canEdit;
+            input.TabStop = canEdit;
+            input.BackColor = canEdit
+                ? Color.White
+                : Color.FromArgb(238, 241, 245);
+        }
+    }
+
+    private TextBox CreateLayoutSizeInput(string value)
+    {
+        bool hasValue = !string.IsNullOrWhiteSpace(value);
+        bool canEdit = AdvancedSettingsEditCheckBox.Checked &&
+                       hasValue;
+
+        TextBox input = new()
+        {
+            Text = value,
+            Dock = DockStyle.Fill,
+            TextAlign = HorizontalAlignment.Center,
+            BorderStyle = BorderStyle.FixedSingle,
+            Enabled = canEdit,
+            TabStop = canEdit,
+            Tag = hasValue,
+            BackColor = canEdit
+                ? Color.White
+                : Color.FromArgb(238, 241, 245),
+            Margin = new Padding(1, 4, 1, 3)
+        };
+
+        input.KeyDown += InputTextBox_KeyDown;
+        return input;
+    }
+
+    private List<DwgLayoutResizeTarget> ReadAdvancedLayoutTargets()
+    {
+        if (!AdvancedSettingsEditCheckBox.Checked)
+        {
+            return new List<DwgLayoutResizeTarget>();
+        }
+
+        if (_layoutSizeInputRows.Count == 0)
+        {
+            throw new Exception(
+                "고급 설정에 변환할 레이아웃이 없습니다. " +
+                "왼쪽에서 DWG 파일을 먼저 선택하세요."
+            );
+        }
+
+        List<DwgLayoutResizeTarget> targets = new();
+
+        foreach (LayoutSizeInputRow row in _layoutSizeInputRows)
+        {
+            double width = ReadRequiredPositiveValue(
+                row.WidthTextBox.Text.Trim(),
+                $"{row.DisplayName} 가로"
+            );
+            double height = ReadRequiredPositiveValue(
+                row.HeightTextBox.Text.Trim(),
+                $"{row.DisplayName} 세로"
+            );
+            double? thickness = ReadOptionalPositiveValue(
+                row.ThicknessTextBox.Text.Trim(),
+                $"{row.DisplayName} 두께"
+            );
+
+            targets.Add(new DwgLayoutResizeTarget
+            {
+                LayoutName = row.LayoutName,
+                Sequence = row.Sequence,
+                TargetWidth = width,
+                TargetHeight = height,
+                TargetThickness = thickness
+            });
+        }
+
+        const double tolerance = 0.000001;
+
+        return targets.Where(target =>
+        {
+            LayoutSizeInputRow original = _layoutSizeInputRows.First(row =>
+                row.Sequence == target.Sequence &&
+                string.Equals(
+                    row.LayoutName,
+                    target.LayoutName,
+                    StringComparison.OrdinalIgnoreCase
+                ));
+
+            bool thicknessChanged =
+                original.OriginalThickness.HasValue !=
+                target.TargetThickness.HasValue ||
+                (original.OriginalThickness.HasValue &&
+                 target.TargetThickness.HasValue &&
+                 Math.Abs(
+                     original.OriginalThickness.Value -
+                     target.TargetThickness.Value
+                 ) > tolerance);
+
+            return
+                Math.Abs(original.OriginalWidth - target.TargetWidth) >
+                    tolerance ||
+                Math.Abs(original.OriginalHeight - target.TargetHeight) >
+                    tolerance ||
+                thicknessChanged;
+        }).ToList();
     }
 
     private void AddOrUpdateConvertedFile(
@@ -2225,6 +2741,7 @@ internal sealed class ResizeMainForm : Form
         CurrentWidthTextBox.Clear();
         CurrentHeightTextBox.Clear();
         CurrentThicknessTextBox.Clear();
+        SetLayoutSizeDisplay(null);
     }
 
     private void ClearTargetDisplayBoxes()
@@ -2913,6 +3430,16 @@ internal sealed class DwgFileSizeSnapshot
     public double Width { get; init; }
     public double Height { get; init; }
     public double? Thickness { get; init; }
+    public List<DwgLayoutSizeSnapshot> LayoutSizes { get; init; } = new();
+}
+
+internal sealed class DwgLayoutSizeSnapshot
+{
+    public string LayoutName { get; init; } = string.Empty;
+    public int Sequence { get; init; }
+    public double Width { get; init; }
+    public double Height { get; init; }
+    public double? Thickness { get; init; }
 }
 
 internal sealed class DwgConversionRequest
@@ -2922,6 +3449,31 @@ internal sealed class DwgConversionRequest
     public double TargetWidth { get; init; }
     public double TargetHeight { get; init; }
     public double? TargetThickness { get; init; }
+    public bool UseLayoutSpecificResize { get; init; }
+    public IReadOnlyList<DwgLayoutResizeTarget> LayoutTargets { get; init; } =
+        Array.Empty<DwgLayoutResizeTarget>();
+}
+
+internal sealed class DwgLayoutResizeTarget
+{
+    public string LayoutName { get; init; } = string.Empty;
+    public int Sequence { get; init; }
+    public double TargetWidth { get; init; }
+    public double TargetHeight { get; init; }
+    public double? TargetThickness { get; init; }
+}
+
+internal sealed class LayoutSizeInputRow
+{
+    public string LayoutName { get; init; } = string.Empty;
+    public int Sequence { get; init; }
+    public string DisplayName { get; init; } = string.Empty;
+    public double OriginalWidth { get; init; }
+    public double OriginalHeight { get; init; }
+    public double? OriginalThickness { get; init; }
+    public required TextBox WidthTextBox { get; init; }
+    public required TextBox HeightTextBox { get; init; }
+    public required TextBox ThicknessTextBox { get; init; }
 }
 
 internal sealed class UiSavedState
@@ -2950,6 +3502,7 @@ internal sealed class UiSavedFileRow
     public string Height { get; init; } = string.Empty;
     public string Thickness { get; init; } = string.Empty;
     public string ModifiedTime { get; init; } = string.Empty;
+    public List<DwgLayoutSizeSnapshot>? LayoutSizes { get; init; }
 }
 
 internal sealed class DwgFolderHeader
