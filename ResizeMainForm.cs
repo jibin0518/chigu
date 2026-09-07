@@ -26,6 +26,11 @@ internal sealed class ResizeMainForm : Form
     private readonly Dictionary<string, List<DwgLayoutSizeSnapshot>>
         _layoutSizesByFilePath = new(StringComparer.OrdinalIgnoreCase);
     private readonly List<LayoutSizeInputRow> _layoutSizeInputRows = new();
+    private readonly Dictionary<string, List<UiSavedAdvancedLayoutValue>>
+        _advancedLayoutValuesByFilePath =
+            new(StringComparer.OrdinalIgnoreCase);
+    private string? _displayedLayoutFilePath;
+    private bool _restoringAdvancedLayoutValues;
 
     private static string UiStateSettingsFile => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -323,6 +328,8 @@ internal sealed class ResizeMainForm : Form
         InputFilesGrid.CellClick += InputFilesGrid_CellClick;
         InputFilesGrid.KeyDown += FileGrid_KeyDown;
         TargetFilesGrid.KeyDown += FileGrid_KeyDown;
+        FormClosing += (_, _) =>
+            SaveCurrentUiState(showSuccessMessage: false);
 
         RegisterEnterAsTab(
             InputPathTextBox,
@@ -404,7 +411,7 @@ internal sealed class ResizeMainForm : Form
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 180F));
         RowStyle layoutSizeRowStyle = new(
             SizeType.Absolute,
-            220F
+            52F
         );
         layout.RowStyles.Add(layoutSizeRowStyle);
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 72F));
@@ -423,7 +430,7 @@ internal sealed class ResizeMainForm : Form
             out Panel layoutSizeContentPanel
         );
 
-        bool layoutSizeCollapsed = false;
+        bool layoutSizeCollapsed = true;
         layoutSizeToggleButton.Click += (_, _) =>
         {
             layoutSizeCollapsed = !layoutSizeCollapsed;
@@ -497,7 +504,7 @@ internal sealed class ResizeMainForm : Form
 
         layoutSizeToggleButton = new Button
         {
-            Text = "▼ 고급 설정",
+            Text = "▶ 고급 설정",
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleLeft,
             FlatStyle = FlatStyle.Flat,
@@ -533,7 +540,8 @@ internal sealed class ResizeMainForm : Form
         {
             Dock = DockStyle.Fill,
             BackColor = CardBackground,
-            Margin = new Padding(0)
+            Margin = new Padding(0),
+            Visible = false
         };
 
         TableLayoutPanel contentLayout = new()
@@ -1073,6 +1081,8 @@ internal sealed class ResizeMainForm : Form
     {
         try
         {
+            CacheDisplayedAdvancedLayoutValues();
+
             string settingsDirectory = Path.GetDirectoryName(
                 UiStateSettingsFile
             )!;
@@ -1090,6 +1100,11 @@ internal sealed class ResizeMainForm : Form
                 TargetWidth = ConversionWidthTextBox.Text.Trim(),
                 TargetHeight = ConversionHeightTextBox.Text.Trim(),
                 TargetThickness = ConversionThicknessTextBox.Text.Trim(),
+                AdvancedLayoutValues =
+                    _advancedLayoutValuesByFilePath
+                        .SelectMany(pair => pair.Value)
+                        .Select(value => value.Copy())
+                        .ToList(),
                 InputFiles = CaptureGridRows(InputFilesGrid),
                 ConvertedFiles = CaptureGridRows(TargetFilesGrid),
                 SelectedInputPath = InputFilesGrid.CurrentRow?.Tag as string,
@@ -1148,6 +1163,29 @@ internal sealed class ResizeMainForm : Form
 
             InputPathTextBox.Text = state.FileListPath ?? string.Empty;
             _manualOutputPath = state.ManualOutputPath ?? string.Empty;
+
+            _advancedLayoutValuesByFilePath.Clear();
+            foreach (UiSavedAdvancedLayoutValue value in
+                state.AdvancedLayoutValues ??
+                Enumerable.Empty<UiSavedAdvancedLayoutValue>())
+            {
+                if (string.IsNullOrWhiteSpace(value.FilePath))
+                {
+                    continue;
+                }
+
+                if (!_advancedLayoutValuesByFilePath.TryGetValue(
+                        value.FilePath,
+                        out List<UiSavedAdvancedLayoutValue>? fileValues
+                    ))
+                {
+                    fileValues = new List<UiSavedAdvancedLayoutValue>();
+                    _advancedLayoutValuesByFilePath[value.FilePath] =
+                        fileValues;
+                }
+
+                fileValues.Add(value.Copy());
+            }
 
             RestoreGridRows(InputFilesGrid, state.InputFiles);
             RestoreGridRows(TargetFilesGrid, state.ConvertedFiles);
@@ -2289,8 +2327,6 @@ internal sealed class ResizeMainForm : Form
                             TargetWidth = targetWidth,
                             TargetHeight = targetHeight,
                             TargetThickness = targetThickness,
-                            UseLayoutSpecificResize =
-                                AdvancedSettingsEditCheckBox.Checked,
                             LayoutTargets = layoutTargets
                         }
                     );
@@ -2396,6 +2432,8 @@ internal sealed class ResizeMainForm : Form
 
     private void SetLayoutSizeDisplay(string? filePath)
     {
+        CacheDisplayedAdvancedLayoutValues();
+        _displayedLayoutFilePath = null;
         LayoutSizeRowsTable.SuspendLayout();
 
         try
@@ -2404,6 +2442,7 @@ internal sealed class ResizeMainForm : Form
             LayoutSizeRowsTable.RowStyles.Clear();
             LayoutSizeRowsTable.RowCount = 0;
             _layoutSizeInputRows.Clear();
+            AdvancedSettingsEditCheckBox.Checked = false;
 
             if (string.IsNullOrWhiteSpace(filePath))
             {
@@ -2416,7 +2455,7 @@ internal sealed class ResizeMainForm : Form
                     out var sizes
                 ) || sizes.Count == 0)
             {
-                AddLayoutMessageRow("노란 레이아웃 박스 없음");
+                AddLayoutMessageRow("치구설정 박스 없음");
                 return;
             }
 
@@ -2433,15 +2472,29 @@ internal sealed class ResizeMainForm : Form
 
             foreach (DwgLayoutSizeSnapshot size in sizes)
             {
-                string displayName = counts[size.LayoutName] > 1
-                    ? $"{size.LayoutName} {size.Sequence}"
+                string displayBaseName = string.Equals(
+                    size.LayoutName,
+                    "치구설정",
+                    StringComparison.OrdinalIgnoreCase
+                )
+                    ? "치구"
                     : size.LayoutName;
+
+                string displayName = counts[size.LayoutName] > 1
+                    ? $"{displayBaseName} {size.Sequence}"
+                    : displayBaseName;
 
                 AddLayoutInputRow(
                     size,
                     displayName
                 );
             }
+
+            AddLayoutFillerRow();
+            _displayedLayoutFilePath = filePath;
+            RestoreAdvancedLayoutValues(filePath);
+            AdvancedSettingsEditCheckBox.Checked =
+                HasAdvancedLayoutInputValues();
         }
         finally
         {
@@ -2461,6 +2514,24 @@ internal sealed class ResizeMainForm : Form
         LayoutSizeRowsTable.SetColumnSpan(label, 6);
     }
 
+    private void AddLayoutFillerRow()
+    {
+        int rowIndex = LayoutSizeRowsTable.RowCount++;
+        LayoutSizeRowsTable.RowStyles.Add(
+            new RowStyle(SizeType.Percent, 100F)
+        );
+
+        Panel filler = new()
+        {
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0),
+            BackColor = CardBackground
+        };
+
+        LayoutSizeRowsTable.Controls.Add(filler, 0, rowIndex);
+        LayoutSizeRowsTable.SetColumnSpan(filler, 6);
+    }
+
     private void AddLayoutInputRow(
         DwgLayoutSizeSnapshot size,
         string displayName
@@ -2476,7 +2547,15 @@ internal sealed class ResizeMainForm : Form
             Text = displayName,
             Dock = DockStyle.Fill,
             TextAlign = ContentAlignment.MiddleLeft,
-            AutoEllipsis = true,
+            AutoSize = false,
+            AutoEllipsis = false,
+            UseMnemonic = false,
+            Font = new Font(
+                "Segoe UI",
+                8.5F,
+                FontStyle.Regular,
+                GraphicsUnit.Point
+            ),
             Margin = new Padding(0)
         };
 
@@ -2490,33 +2569,40 @@ internal sealed class ResizeMainForm : Form
             FormatNullableValue(size.Thickness)
         );
 
+        TableLayoutPanel rowLayout = CreateLayoutSizeGridLayout();
+        rowLayout.Dock = DockStyle.Fill;
+        rowLayout.RowCount = 1;
+        rowLayout.RowStyles.Add(
+            new RowStyle(SizeType.Percent, 100F)
+        );
+
         _layoutSizeInputRows.Add(new LayoutSizeInputRow
         {
             LayoutName = size.LayoutName,
             Sequence = size.Sequence,
             DisplayName = displayName,
-            OriginalWidth = size.Width,
-            OriginalHeight = size.Height,
-            OriginalThickness = size.Thickness,
             WidthTextBox = widthInput,
             HeightTextBox = heightInput,
             ThicknessTextBox = thicknessInput
         });
 
-        LayoutSizeRowsTable.Controls.Add(nameLabel, 0, rowIndex);
-        LayoutSizeRowsTable.Controls.Add(widthInput, 1, rowIndex);
-        LayoutSizeRowsTable.Controls.Add(
+        rowLayout.Controls.Add(nameLabel, 0, 0);
+        rowLayout.Controls.Add(widthInput, 1, 0);
+        rowLayout.Controls.Add(
             CreateLayoutHeaderLabel("×"),
             2,
-            rowIndex
+            0
         );
-        LayoutSizeRowsTable.Controls.Add(heightInput, 3, rowIndex);
-        LayoutSizeRowsTable.Controls.Add(
+        rowLayout.Controls.Add(heightInput, 3, 0);
+        rowLayout.Controls.Add(
             CreateLayoutHeaderLabel("×"),
             4,
-            rowIndex
+            0
         );
-        LayoutSizeRowsTable.Controls.Add(thicknessInput, 5, rowIndex);
+        rowLayout.Controls.Add(thicknessInput, 5, 0);
+
+        LayoutSizeRowsTable.Controls.Add(rowLayout, 0, rowIndex);
+        LayoutSizeRowsTable.SetColumnSpan(rowLayout, 6);
     }
 
     private void AdvancedSettingsEditCheckBox_CheckedChanged(
@@ -2524,13 +2610,15 @@ internal sealed class ResizeMainForm : Form
         EventArgs e
     )
     {
-        foreach (TextBox input in LayoutSizeRowsTable.Controls
-            .OfType<TextBox>())
+        foreach (TextBox input in _layoutSizeInputRows.SelectMany(row =>
+            new[]
+            {
+                row.WidthTextBox,
+                row.HeightTextBox,
+                row.ThicknessTextBox
+            }))
         {
-            bool hasValue = input.Tag is bool valueExists &&
-                            valueExists;
-            bool canEdit = AdvancedSettingsEditCheckBox.Checked &&
-                           hasValue;
+            bool canEdit = AdvancedSettingsEditCheckBox.Checked;
 
             input.Enabled = canEdit;
             input.TabStop = canEdit;
@@ -2540,21 +2628,19 @@ internal sealed class ResizeMainForm : Form
         }
     }
 
-    private TextBox CreateLayoutSizeInput(string value)
+    private TextBox CreateLayoutSizeInput(string currentValue)
     {
-        bool hasValue = !string.IsNullOrWhiteSpace(value);
-        bool canEdit = AdvancedSettingsEditCheckBox.Checked &&
-                       hasValue;
+        bool canEdit = AdvancedSettingsEditCheckBox.Checked;
 
         TextBox input = new()
         {
-            Text = value,
+            Text = string.Empty,
+            PlaceholderText = currentValue,
             Dock = DockStyle.Fill,
             TextAlign = HorizontalAlignment.Center,
             BorderStyle = BorderStyle.FixedSingle,
             Enabled = canEdit,
             TabStop = canEdit,
-            Tag = hasValue,
             BackColor = canEdit
                 ? Color.White
                 : Color.FromArgb(238, 241, 245),
@@ -2562,7 +2648,94 @@ internal sealed class ResizeMainForm : Form
         };
 
         input.KeyDown += InputTextBox_KeyDown;
+        input.TextChanged += AdvancedLayoutInput_TextChanged;
         return input;
+    }
+
+    private void AdvancedLayoutInput_TextChanged(
+        object? sender,
+        EventArgs e
+    )
+    {
+        if (!_restoringAdvancedLayoutValues)
+        {
+            CacheDisplayedAdvancedLayoutValues();
+        }
+    }
+
+    private void CacheDisplayedAdvancedLayoutValues()
+    {
+        string? displayedFilePath = _displayedLayoutFilePath;
+
+        if (_restoringAdvancedLayoutValues ||
+            string.IsNullOrWhiteSpace(displayedFilePath) ||
+            _layoutSizeInputRows.Count == 0)
+        {
+            return;
+        }
+
+        _advancedLayoutValuesByFilePath[displayedFilePath] =
+            _layoutSizeInputRows.Select(row =>
+                new UiSavedAdvancedLayoutValue
+                {
+                    FilePath = displayedFilePath,
+                    LayoutName = row.LayoutName,
+                    Sequence = row.Sequence,
+                    Width = row.WidthTextBox.Text,
+                    Height = row.HeightTextBox.Text,
+                    Thickness = row.ThicknessTextBox.Text
+                }
+            ).ToList();
+    }
+
+    private void RestoreAdvancedLayoutValues(string filePath)
+    {
+        if (!_advancedLayoutValuesByFilePath.TryGetValue(
+                filePath,
+                out List<UiSavedAdvancedLayoutValue>? savedValues
+            ))
+        {
+            return;
+        }
+
+        _restoringAdvancedLayoutValues = true;
+
+        try
+        {
+            foreach (LayoutSizeInputRow row in _layoutSizeInputRows)
+            {
+                UiSavedAdvancedLayoutValue? saved =
+                    savedValues.FirstOrDefault(value =>
+                        value.Sequence == row.Sequence &&
+                        string.Equals(
+                            value.LayoutName,
+                            row.LayoutName,
+                            StringComparison.OrdinalIgnoreCase
+                        ));
+
+                if (saved == null)
+                {
+                    continue;
+                }
+
+                row.WidthTextBox.Text = saved.Width ?? string.Empty;
+                row.HeightTextBox.Text = saved.Height ?? string.Empty;
+                row.ThicknessTextBox.Text =
+                    saved.Thickness ?? string.Empty;
+            }
+        }
+        finally
+        {
+            _restoringAdvancedLayoutValues = false;
+        }
+    }
+
+    private bool HasAdvancedLayoutInputValues()
+    {
+        return _layoutSizeInputRows.Any(row =>
+            !string.IsNullOrWhiteSpace(row.WidthTextBox.Text) ||
+            !string.IsNullOrWhiteSpace(row.HeightTextBox.Text) ||
+            !string.IsNullOrWhiteSpace(row.ThicknessTextBox.Text));
     }
 
     private List<DwgLayoutResizeTarget> ReadAdvancedLayoutTargets()
@@ -2584,18 +2757,28 @@ internal sealed class ResizeMainForm : Form
 
         foreach (LayoutSizeInputRow row in _layoutSizeInputRows)
         {
-            double width = ReadRequiredPositiveValue(
+            double? width = ReadOptionalPositiveValue(
                 row.WidthTextBox.Text.Trim(),
                 $"{row.DisplayName} 가로"
             );
-            double height = ReadRequiredPositiveValue(
+            double? height = ReadOptionalPositiveValue(
                 row.HeightTextBox.Text.Trim(),
                 $"{row.DisplayName} 세로"
             );
-            double? thickness = ReadOptionalPositiveValue(
+            ReadAdvancedThicknessValue(
                 row.ThicknessTextBox.Text.Trim(),
-                $"{row.DisplayName} 두께"
+                $"{row.DisplayName} 두께",
+                out double? thickness,
+                out double? minimumThickness
             );
+
+            if (!width.HasValue &&
+                !height.HasValue &&
+                !thickness.HasValue &&
+                !minimumThickness.HasValue)
+            {
+                continue;
+            }
 
             targets.Add(new DwgLayoutResizeTarget
             {
@@ -2603,39 +2786,60 @@ internal sealed class ResizeMainForm : Form
                 Sequence = row.Sequence,
                 TargetWidth = width,
                 TargetHeight = height,
-                TargetThickness = thickness
+                TargetThickness = thickness,
+                MinimumThickness = minimumThickness
             });
         }
 
-        const double tolerance = 0.000001;
+        return targets;
+    }
 
-        return targets.Where(target =>
+    private static void ReadAdvancedThicknessValue(
+        string text,
+        string fieldName,
+        out double? exactValue,
+        out double? minimumValue
+    )
+    {
+        exactValue = null;
+        minimumValue = null;
+
+        string valueText = text.Trim();
+
+        if (string.IsNullOrWhiteSpace(valueText))
         {
-            LayoutSizeInputRow original = _layoutSizeInputRows.First(row =>
-                row.Sequence == target.Sequence &&
-                string.Equals(
-                    row.LayoutName,
-                    target.LayoutName,
-                    StringComparison.OrdinalIgnoreCase
-                ));
+            return;
+        }
 
-            bool thicknessChanged =
-                original.OriginalThickness.HasValue !=
-                target.TargetThickness.HasValue ||
-                (original.OriginalThickness.HasValue &&
-                 target.TargetThickness.HasValue &&
-                 Math.Abs(
-                     original.OriginalThickness.Value -
-                     target.TargetThickness.Value
-                 ) > tolerance);
+        // "70<"는 70 < 목표값, ">70"은 목표값 > 70을 뜻한다.
+        // 두 표기 모두 실제 계산에서는 두께가 70 아래로 내려가지 않게 한다.
+        if (valueText.EndsWith("<", StringComparison.Ordinal))
+        {
+            minimumValue = ReadRequiredPositiveValue(
+                valueText[..^1].Trim(),
+                fieldName
+            );
+            return;
+        }
 
-            return
-                Math.Abs(original.OriginalWidth - target.TargetWidth) >
-                    tolerance ||
-                Math.Abs(original.OriginalHeight - target.TargetHeight) >
-                    tolerance ||
-                thicknessChanged;
-        }).ToList();
+        if (valueText.StartsWith(">", StringComparison.Ordinal))
+        {
+            minimumValue = ReadRequiredPositiveValue(
+                valueText[1..].Trim(),
+                fieldName
+            );
+            return;
+        }
+
+        if (valueText.Contains('<') || valueText.Contains('>'))
+        {
+            throw new Exception(
+                $"{fieldName} 범위 형식이 올바르지 않습니다: '{text}'\n" +
+                "최솟값은 '70<' 또는 '>70' 형식으로 입력하세요."
+            );
+        }
+
+        exactValue = ReadRequiredPositiveValue(valueText, fieldName);
     }
 
     private void AddOrUpdateConvertedFile(
@@ -3449,7 +3653,6 @@ internal sealed class DwgConversionRequest
     public double TargetWidth { get; init; }
     public double TargetHeight { get; init; }
     public double? TargetThickness { get; init; }
-    public bool UseLayoutSpecificResize { get; init; }
     public IReadOnlyList<DwgLayoutResizeTarget> LayoutTargets { get; init; } =
         Array.Empty<DwgLayoutResizeTarget>();
 }
@@ -3458,9 +3661,10 @@ internal sealed class DwgLayoutResizeTarget
 {
     public string LayoutName { get; init; } = string.Empty;
     public int Sequence { get; init; }
-    public double TargetWidth { get; init; }
-    public double TargetHeight { get; init; }
+    public double? TargetWidth { get; init; }
+    public double? TargetHeight { get; init; }
     public double? TargetThickness { get; init; }
+    public double? MinimumThickness { get; init; }
 }
 
 internal sealed class LayoutSizeInputRow
@@ -3468,9 +3672,6 @@ internal sealed class LayoutSizeInputRow
     public string LayoutName { get; init; } = string.Empty;
     public int Sequence { get; init; }
     public string DisplayName { get; init; } = string.Empty;
-    public double OriginalWidth { get; init; }
-    public double OriginalHeight { get; init; }
-    public double? OriginalThickness { get; init; }
     public required TextBox WidthTextBox { get; init; }
     public required TextBox HeightTextBox { get; init; }
     public required TextBox ThicknessTextBox { get; init; }
@@ -3485,10 +3686,35 @@ internal sealed class UiSavedState
     public string? TargetWidth { get; init; }
     public string? TargetHeight { get; init; }
     public string? TargetThickness { get; init; }
+    public List<UiSavedAdvancedLayoutValue>? AdvancedLayoutValues
+        { get; init; }
     public List<UiSavedFileRow>? InputFiles { get; init; }
     public List<UiSavedFileRow>? ConvertedFiles { get; init; }
     public string? SelectedInputPath { get; init; }
     public string? SelectedConvertedPath { get; init; }
+}
+
+internal sealed class UiSavedAdvancedLayoutValue
+{
+    public string FilePath { get; init; } = string.Empty;
+    public string LayoutName { get; init; } = string.Empty;
+    public int Sequence { get; init; }
+    public string? Width { get; init; }
+    public string? Height { get; init; }
+    public string? Thickness { get; init; }
+
+    public UiSavedAdvancedLayoutValue Copy()
+    {
+        return new UiSavedAdvancedLayoutValue
+        {
+            FilePath = FilePath,
+            LayoutName = LayoutName,
+            Sequence = Sequence,
+            Width = Width,
+            Height = Height,
+            Thickness = Thickness
+        };
+    }
 }
 
 internal sealed class UiSavedFileRow

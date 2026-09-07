@@ -73,8 +73,8 @@ internal static class Program_V2
     }
 
     /// <summary>
-    /// 노란 외곽 박스가 들어 있는 지정 레이어별 가로/세로 크기를 읽는다.
-    /// 같은 레이어에 박스가 여러 개 있으면 도면의 왼쪽 위부터 순서대로 번호를 붙인다.
+    /// "치구설정" 레이어의 닫힌 외곽 박스 안에 있는 패널 크기를 읽는다.
+    /// 같은 레이어에 박스가 여러 개 있으면 도면의 왼쪽부터 순서대로 번호를 붙인다.
     /// </summary>
     private static List<DwgLayoutSizeSnapshot> ReadYellowLayoutSizes(
         DrawingData drawingData,
@@ -115,55 +115,74 @@ internal static class Program_V2
             IReadOnlyList<PanelGroup> panelGroups
         )
     {
-        string[] layoutOrder =
-        {
-            "테이핑",
-            "상판",
-            "중판",
-            "바닥판"
-        };
+        const string layoutName = "치구설정";
 
         List<YellowLayoutPanelContext> result = new();
 
-        foreach (string layoutName in layoutOrder)
+        List<EntityData> boxes = drawingData.Entities
+            .Where(entity =>
+                entity.HasBoundingBox &&
+                entity.Width > 0.000001 &&
+                entity.Height > 0.000001 &&
+                string.Equals(
+                    entity.LayerName.Trim(),
+                    layoutName,
+                    StringComparison.OrdinalIgnoreCase
+                ) &&
+                entity.IsClosed &&
+                (entity.ObjectName == "LWPOLYLINE" ||
+                 entity.ObjectName == "POLYLINE2D")
+            )
+            .OrderBy(entity => entity.MinX)
+            .ThenByDescending(entity => entity.MaxY)
+            .ToList();
+
+        for (int index = 0; index < boxes.Count; index++)
         {
-            List<EntityData> boxes = drawingData.Entities
-                .Where(entity =>
-                    entity.ColorIndex == 2 &&
-                    entity.HasBoundingBox &&
-                    entity.Width > 0.000001 &&
-                    entity.Height > 0.000001 &&
-                    string.Equals(
-                        entity.LayerName.Trim(),
-                        layoutName,
-                        StringComparison.OrdinalIgnoreCase
-                    ) &&
-                    entity.IsClosed &&
-                    (entity.ObjectName == "LWPOLYLINE" ||
-                     entity.ObjectName == "POLYLINE2D")
-                )
-                .OrderBy(entity => entity.MinX)
-                .ThenByDescending(entity => entity.MaxY)
+            EntityData box = boxes[index];
+            List<PanelGroup> layoutPanels = panelGroups
+                .Where(panel => IsPanelInsideLayoutBox(panel, box))
                 .ToList();
 
-            for (int index = 0; index < boxes.Count; index++)
+            // 박스 안에서 실제 패널을 찾은 경우만 고급 설정 대상으로 표시한다.
+            if (layoutPanels.Count == 0)
             {
-                EntityData box = boxes[index];
-                List<PanelGroup> layoutPanels = panelGroups
-                    .Where(panel => IsPanelInsideLayoutBox(panel, box))
-                    .ToList();
-
-                result.Add(new YellowLayoutPanelContext
-                {
-                    LayoutName = layoutName,
-                    Sequence = index + 1,
-                    LayoutBox = box,
-                    PanelGroups = layoutPanels
-                });
+                continue;
             }
+
+            result.Add(new YellowLayoutPanelContext
+            {
+                LayoutName = layoutName,
+                Sequence = index + 1,
+                LayoutBox = box,
+                PanelGroups = layoutPanels
+            });
         }
 
         return result;
+    }
+
+    private static void RemoveChiguSettingLayoutBoxes(
+        DrawingData drawingData
+    )
+    {
+        List<EntityData> layoutBoxes = drawingData.Entities
+            .Where(entity =>
+                string.Equals(
+                    entity.LayerName.Trim(),
+                    "치구설정",
+                    StringComparison.OrdinalIgnoreCase
+                ) &&
+                entity.IsClosed &&
+                (entity.ObjectName == "LWPOLYLINE" ||
+                 entity.ObjectName == "POLYLINE2D")
+            )
+            .ToList();
+
+        foreach (EntityData layoutBox in layoutBoxes)
+        {
+            RemoveEntityFromDrawing(drawingData, layoutBox);
+        }
     }
 
     private static bool IsPanelInsideLayoutBox(
@@ -282,12 +301,14 @@ internal static class Program_V2
             TargetThickness = request.TargetThickness
         };
 
-        if (request.UseLayoutSpecificResize)
+        if (request.LayoutTargets.Count > 0)
         {
             ApplyLayoutSpecificResizes(
                 drawingData,
                 panelGroups,
                 originalNestedVertex16Bindings,
+                currentValues,
+                resizeInput,
                 request.LayoutTargets
             );
         }
@@ -327,6 +348,9 @@ internal static class Program_V2
         );
 
         outputPath = GetAvailableOutputPath(outputPath);
+
+        // 판별에만 사용한 치구설정 박스는 결과 DWG에서 제거한다.
+        RemoveChiguSettingLayoutBoxes(drawingData);
 
         SaveAsNewDwg(
             document,
@@ -391,6 +415,8 @@ internal static class Program_V2
         IReadOnlyList<PanelGroup> allPanelGroups,
         IReadOnlyDictionary<PanelGroup, List<PanelGroup>>
             originalNestedVertex16Bindings,
+        CurrentDimensionValues globalCurrentValues,
+        ResizeInput globalResizeInput,
         IReadOnlyList<DwgLayoutResizeTarget> targets
     )
     {
@@ -399,6 +425,14 @@ internal static class Program_V2
                 drawingData,
                 allPanelGroups
             );
+
+        List<PanelGroup> activePanelGroups = allPanelGroups.ToList();
+        HashSet<PanelGroup> overriddenPanels = new();
+        List<(
+            List<ChiguCircleBoltBinding> Bindings,
+            double TargetWidth,
+            double TargetHeight
+        )> circleResizeJobs = new();
 
         foreach (DwgLayoutResizeTarget target in targets)
         {
@@ -420,6 +454,7 @@ internal static class Program_V2
 
             List<PanelGroup> layoutPanelGroups =
                 layout.PanelGroups.ToList();
+            overriddenPanels.UnionWith(layoutPanelGroups);
             CurrentDimensionValues currentValues;
 
             try
@@ -436,37 +471,52 @@ internal static class Program_V2
                 );
             }
 
+            double? effectiveLayoutThickness =
+                target.TargetThickness ??
+                globalResizeInput.TargetThickness;
+
+            if (target.MinimumThickness.HasValue)
+            {
+                double thicknessBeforeLimit =
+                    effectiveLayoutThickness ??
+                    currentValues.Thickness ??
+                    target.MinimumThickness.Value;
+
+                effectiveLayoutThickness = Math.Max(
+                    thicknessBeforeLimit,
+                    target.MinimumThickness.Value
+                );
+            }
+
             ResizeInput resizeInput = new()
             {
-                TargetWidth = target.TargetWidth,
-                TargetHeight = target.TargetHeight,
-                TargetThickness = target.TargetThickness
+                TargetWidth =
+                    target.TargetWidth ?? globalResizeInput.TargetWidth,
+                TargetHeight =
+                    target.TargetHeight ?? globalResizeInput.TargetHeight,
+                TargetThickness = effectiveLayoutThickness
             };
 
-            Dictionary<PanelGroup, List<PanelGroup>> layoutBindings =
-                layoutPanelGroups.ToDictionary(
-                    panel => panel,
-                    panel => originalNestedVertex16Bindings.TryGetValue(
-                        panel,
-                        out List<PanelGroup>? nestedPanels
-                    )
-                        ? nestedPanels
-                            .Where(layoutPanelGroups.Contains)
-                            .ToList()
-                        : new List<PanelGroup>()
-                );
-
             double effectiveTargetThickness =
-                target.TargetThickness ??
+                resizeInput.TargetThickness ??
                 currentValues.Thickness ??
                 double.PositiveInfinity;
 
-            if (effectiveTargetThickness <= 35.0)
+            // 고급 설정에서 두께를 직접 입력했다면 그 값 자체가 목표이므로
+            // 35 이하 자동 삭제 규칙보다 우선한다.
+            if (!target.TargetThickness.HasValue &&
+                effectiveTargetThickness <= 35.0)
             {
+                List<PanelGroup> panelsBeforeRemoval =
+                    layoutPanelGroups.ToList();
                 RemoveThicknessPanelGroups(
                     drawingData,
                     layoutPanelGroups
                 );
+                HashSet<PanelGroup> removedPanels = panelsBeforeRemoval
+                    .Except(layoutPanelGroups)
+                    .ToHashSet();
+                activePanelGroups.RemoveAll(removedPanels.Contains);
             }
 
             List<ChiguCircleBoltBinding> circleBindings =
@@ -485,23 +535,78 @@ internal static class Program_V2
                 resizeInput.TargetHeight
             );
 
-            ArrangePanelGroupsWithGap(
-                layoutPanelGroups,
-                100.0,
-                layoutBindings
-            );
-
-            ResizeChiguCirclesAroundBoltHoles(
+            circleResizeJobs.Add((
                 circleBindings,
                 resizeInput.TargetWidth,
                 resizeInput.TargetHeight
+            ));
+        }
+
+        // 고급 설정 대상이 아닌 나머지 패널은 기존 전체 목표값으로 변환한다.
+        List<PanelGroup> defaultPanelGroups = activePanelGroups
+            .Where(panel => !overriddenPanels.Contains(panel))
+            .ToList();
+
+        if (defaultPanelGroups.Count > 0)
+        {
+            double effectiveGlobalThickness =
+                globalResizeInput.TargetThickness ??
+                globalCurrentValues.Thickness ??
+                double.PositiveInfinity;
+
+            if (effectiveGlobalThickness <= 35.0)
+            {
+                List<PanelGroup> panelsBeforeRemoval =
+                    defaultPanelGroups.ToList();
+                RemoveThicknessPanelGroups(
+                    drawingData,
+                    defaultPanelGroups
+                );
+                HashSet<PanelGroup> removedPanels = panelsBeforeRemoval
+                    .Except(defaultPanelGroups)
+                    .ToHashSet();
+                activePanelGroups.RemoveAll(removedPanels.Contains);
+            }
+
+            List<ChiguCircleBoltBinding> defaultCircleBindings =
+                FindChiguCircleBoltBindings(defaultPanelGroups);
+
+            ApplyPanelResize(
+                drawingData,
+                defaultPanelGroups,
+                globalCurrentValues,
+                globalResizeInput
             );
 
-            ShowBoltHoleClearanceWarnings(
-                layoutPanelGroups,
-                3.9
+            ResizeChiguCirclesAroundBoltHoles(
+                defaultCircleBindings,
+                globalResizeInput.TargetWidth,
+                globalResizeInput.TargetHeight
+            );
+
+            circleResizeJobs.Add((
+                defaultCircleBindings,
+                globalResizeInput.TargetWidth,
+                globalResizeInput.TargetHeight
+            ));
+        }
+
+        ArrangePanelGroupsWithGap(
+            activePanelGroups,
+            100.0,
+            originalNestedVertex16Bindings
+        );
+
+        foreach (var job in circleResizeJobs)
+        {
+            ResizeChiguCirclesAroundBoltHoles(
+                job.Bindings,
+                job.TargetWidth,
+                job.TargetHeight
             );
         }
+
+        ShowBoltHoleClearanceWarnings(activePanelGroups, 3.9);
     }
 
     private static (
@@ -552,21 +657,21 @@ internal static class Program_V2
             string fileName =
                 Path.GetFileNameWithoutExtension(dwgPath);
 
-            SaveEntityReport(
-                drawingData,
-                Path.Combine(
-                    directory,
-                    $"{fileName}_objects_v2.txt"
-                )
-            );
+            // SaveEntityReport(
+            //     drawingData,
+            //     Path.Combine(
+            //         directory,
+            //         $"{fileName}_objects_v2.txt"
+            //     )
+            // );
 
-            SavePanelGroupReport(
-                panelGroups,
-                Path.Combine(
-                    directory,
-                    $"{fileName}_panels_v2.txt"
-                )
-            );
+            // SavePanelGroupReport(
+            //     panelGroups,
+            //     Path.Combine(
+            //         directory,
+            //         $"{fileName}_panels_v2.txt"
+            //     )
+            // );
         }
 
         CurrentDimensionValues currentValues =
@@ -2843,8 +2948,7 @@ internal static class Program_V2
 
 
     /// <summary>
-    /// 목표 높이가 35 이하일 때 일반 두께 패널 묶음을 DWG에서 삭제한다.
-    /// 짧은 변이 18인 고정형 두께 패널은 삭제하지 않는다.
+    /// 목표 높이가 35 이하일 때 두께 패널 묶음을 DWG에서 삭제한다.
     /// 패널 기준 폴리선뿐 아니라 빨간 박스, 치수 및 묶인 모든 객체를 제거하며,
     /// 삭제된 패널은 이후 크기 변경과 재배치 목록에서도 제외한다.
     /// </summary>
@@ -2853,17 +2957,10 @@ internal static class Program_V2
         List<PanelGroup> panelGroups
     )
     {
-        List<PanelGroup> fixedThicknessPanels = panelGroups
-            .Where(IsFixed18ThicknessPanel)
-            .ToList();
-
         // FindPanelGroups에서 최초 확정된 두께 패널만 삭제한다.
         // 여기서 비율을 다시 계산하면 일반 패널이 두께 패널로 뒤집힐 수 있다.
         List<PanelGroup> thicknessPanels = panelGroups
-            .Where(panel =>
-                panel.IsThicknessPanel &&
-                !IsFixed18ThicknessPanel(panel)
-            )
+            .Where(panel => panel.IsThicknessPanel)
             .ToList();
 
         if (thicknessPanels.Count == 0)
@@ -2876,16 +2973,6 @@ internal static class Program_V2
                 .Append(panel.BasePolyline))
             .Select(data => data.Entity)
             .ToHashSet();
-
-        HashSet<Entity> fixedPanelEntities = fixedThicknessPanels
-            .SelectMany(panel => panel.Entities
-                .Append(panel.BasePolyline))
-            .Select(data => data.Entity)
-            .ToHashSet();
-
-        // 다른 패널에 중복으로 묶인 경우에도 18 고정 패널 객체는 보호한다.
-        entitiesToRemove.ExceptWith(fixedPanelEntities);
-
 
         foreach (Entity entity in entitiesToRemove)
         {
@@ -2970,9 +3057,6 @@ internal static class Program_V2
             double panelWidthDelta;
             double panelHeightDelta;
 
-            bool keepPanelShortSideFixed =
-                IsFixed18ThicknessPanel(panel);
-
             double panelThicknessDelta = 0.0;
 
             if (panel.IsThicknessPanel && input.TargetThickness.HasValue)
@@ -3015,21 +3099,6 @@ internal static class Program_V2
                 continue;
             }
 
-            // 수정 전 짧은 변이 18인 두께 패널은 목표 두께와 관계없이
-            // 가로형은 높이를, 세로형은 너비를 그대로 유지한다.
-            if (keepPanelShortSideFixed)
-            {
-                if (panel.ThicknessDirection == ThicknessPanelDirection.Horizontal)
-                {
-                    panelHeightDelta = 0.0;
-                }
-                else if (panel.ThicknessDirection == ThicknessPanelDirection.Vertical)
-                {
-                    panelWidthDelta = 0.0;
-                }
-            }
-
-
             ResizeSinglePanel(
                 panel,
                 panelWidthDelta,
@@ -3057,23 +3126,6 @@ internal static class Program_V2
             vertex16TargetWidth,
             vertex16TargetHeight
         );
-    }
-
-    private static bool IsFixed18ThicknessPanel(
-        PanelGroup panel
-    )
-    {
-        const double fixedShortSide = 18.0;
-        const double tolerance = 0.001;
-
-        double shortSide = Math.Min(
-            panel.BasePolyline.Width,
-            panel.BasePolyline.Height
-        );
-
-        return
-            panel.IsThicknessPanel &&
-            Math.Abs(shortSide - fixedShortSide) <= tolerance;
     }
 
     /// <summary>
