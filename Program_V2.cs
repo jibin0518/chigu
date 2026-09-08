@@ -4,7 +4,6 @@ using System.IO;
 using System.Linq;
 using System.Globalization;
 using System.Reflection;
-using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using ACadSharp;
@@ -65,29 +64,33 @@ internal static class Program_V2
             Width = context.CurrentValues.Width,
             Height = context.CurrentValues.Height,
             Thickness = context.CurrentValues.Thickness,
-            LayoutSizes = ReadYellowLayoutSizes(
-                context.DrawingData,
-                context.PanelGroups
+            LayoutSizes = ReadRecognizedPanelSizes(
+                context.PanelGroups,
+                context.NestedVertex16Bindings
             )
         };
     }
 
     /// <summary>
-    /// "치구설정" 레이어의 닫힌 외곽 박스 안에 있는 패널 크기를 읽는다.
-    /// 같은 레이어에 박스가 여러 개 있으면 도면의 왼쪽부터 순서대로 번호를 붙인다.
+    /// 기존 패널 탐색 결과를 조립 묶음별로 나누어 고급 설정에 표시할 크기를 읽는다.
+    /// 일반 패널과 연결된 두께 패널 및 내부 16꼭짓점 패널을 같은 치구로 취급한다.
     /// </summary>
-    private static List<DwgLayoutSizeSnapshot> ReadYellowLayoutSizes(
-        DrawingData drawingData,
-        IReadOnlyList<PanelGroup> panelGroups
+    private static List<DwgLayoutSizeSnapshot> ReadRecognizedPanelSizes(
+        IReadOnlyList<PanelGroup> panelGroups,
+        IReadOnlyDictionary<PanelGroup, List<PanelGroup>>
+            nestedVertex16Bindings
     )
     {
         List<DwgLayoutSizeSnapshot> result = new();
 
-        foreach (YellowLayoutPanelContext layout in
-            FindYellowLayoutPanelContexts(drawingData, panelGroups))
+        foreach (RecognizedPanelContext panelContext in
+            FindRecognizedPanelContexts(
+                panelGroups,
+                nestedVertex16Bindings
+            ))
         {
-            if (!TryReadLayoutPanelSize(
-                    layout.PanelGroups,
+            if (!TryReadPanelAssemblySize(
+                    panelContext.PanelGroups,
                     out double width,
                     out double height,
                     out double? thickness
@@ -98,8 +101,8 @@ internal static class Program_V2
 
             result.Add(new DwgLayoutSizeSnapshot
             {
-                LayoutName = layout.LayoutName,
-                Sequence = layout.Sequence,
+                LayoutName = panelContext.LayoutName,
+                Sequence = panelContext.Sequence,
                 Width = width,
                 Height = height,
                 Thickness = thickness
@@ -109,105 +112,76 @@ internal static class Program_V2
         return result;
     }
 
-    private static List<YellowLayoutPanelContext>
-        FindYellowLayoutPanelContexts(
-            DrawingData drawingData,
-            IReadOnlyList<PanelGroup> panelGroups
+    private static List<RecognizedPanelContext>
+        FindRecognizedPanelContexts(
+            IReadOnlyList<PanelGroup> panelGroups,
+            IReadOnlyDictionary<PanelGroup, List<PanelGroup>>
+                originalNestedVertex16Bindings
         )
     {
-        const string layoutName = "치구설정";
-
-        List<YellowLayoutPanelContext> result = new();
-
-        List<EntityData> boxes = drawingData.Entities
-            .Where(entity =>
-                entity.HasBoundingBox &&
-                entity.Width > 0.000001 &&
-                entity.Height > 0.000001 &&
-                string.Equals(
-                    entity.LayerName.Trim(),
-                    layoutName,
-                    StringComparison.OrdinalIgnoreCase
-                ) &&
-                entity.IsClosed &&
-                (entity.ObjectName == "LWPOLYLINE" ||
-                 entity.ObjectName == "POLYLINE2D")
-            )
-            .OrderBy(entity => entity.MinX)
-            .ThenByDescending(entity => entity.MaxY)
+        List<PanelGroup> normalPanels = panelGroups
+            .Where(panel => !panel.IsThicknessPanel)
             .ToList();
 
-        for (int index = 0; index < boxes.Count; index++)
+        Dictionary<PanelGroup, List<PanelGroup>> nestedBindings =
+            normalPanels.ToDictionary(
+                panel => panel,
+                panel => originalNestedVertex16Bindings.TryGetValue(
+                    panel,
+                    out List<PanelGroup>? nestedPanels)
+                        ? nestedPanels
+                            .Where(normalPanels.Contains)
+                            .ToList()
+                        : new List<PanelGroup>()
+            );
+
+        HashSet<PanelGroup> nestedPanels = nestedBindings
+            .SelectMany(binding => binding.Value)
+            .ToHashSet();
+
+        List<PanelGroup> mainPanels = normalPanels
+            .Where(panel => !nestedPanels.Contains(panel))
+            .OrderBy(panel => panel.BasePolyline.MinX)
+            .ThenBy(panel => panel.BasePolyline.MinY)
+            .ToList();
+
+        if (mainPanels.Count == 0)
         {
-            EntityData box = boxes[index];
-            List<PanelGroup> layoutPanels = panelGroups
-                .Where(panel => IsPanelInsideLayoutBox(panel, box))
-                .ToList();
+            return new List<RecognizedPanelContext>();
+        }
 
-            // 박스 안에서 실제 패널을 찾은 경우만 고급 설정 대상으로 표시한다.
-            if (layoutPanels.Count == 0)
-            {
-                continue;
-            }
+        List<PanelGroup> thicknessPanels = panelGroups
+            .Where(panel => panel.IsThicknessPanel)
+            .ToList();
 
-            result.Add(new YellowLayoutPanelContext
+        Dictionary<PanelGroup, List<PanelGroup>> thicknessBindings =
+            BindThicknessPanelsToMainPanels(
+                mainPanels,
+                thicknessPanels
+            );
+
+        List<RecognizedPanelContext> result = new();
+
+        for (int index = 0; index < mainPanels.Count; index++)
+        {
+            PanelGroup mainPanel = mainPanels[index];
+            List<PanelGroup> groupedPanels = new() { mainPanel };
+            groupedPanels.AddRange(nestedBindings[mainPanel]);
+            groupedPanels.AddRange(thicknessBindings[mainPanel]);
+
+            result.Add(new RecognizedPanelContext
             {
-                LayoutName = layoutName,
+                LayoutName = "치구",
                 Sequence = index + 1,
-                LayoutBox = box,
-                PanelGroups = layoutPanels
+                PanelGroups = groupedPanels.Distinct().ToList()
             });
         }
 
         return result;
     }
 
-    private static void RemoveChiguSettingLayoutBoxes(
-        DrawingData drawingData
-    )
-    {
-        List<EntityData> layoutBoxes = drawingData.Entities
-            .Where(entity =>
-                string.Equals(
-                    entity.LayerName.Trim(),
-                    "치구설정",
-                    StringComparison.OrdinalIgnoreCase
-                ) &&
-                entity.IsClosed &&
-                (entity.ObjectName == "LWPOLYLINE" ||
-                 entity.ObjectName == "POLYLINE2D")
-            )
-            .ToList();
-
-        foreach (EntityData layoutBox in layoutBoxes)
-        {
-            RemoveEntityFromDrawing(drawingData, layoutBox);
-        }
-    }
-
-    private static bool IsPanelInsideLayoutBox(
-        PanelGroup panel,
-        EntityData layoutBox
-    )
-    {
-        EntityData panelBase = panel.BasePolyline;
-
-        if (!panelBase.HasBoundingBox)
-        {
-            return false;
-        }
-
-        const double tolerance = 0.001;
-
-        return
-            panelBase.CenterBoxX >= layoutBox.MinX - tolerance &&
-            panelBase.CenterBoxX <= layoutBox.MaxX + tolerance &&
-            panelBase.CenterBoxY >= layoutBox.MinY - tolerance &&
-            panelBase.CenterBoxY <= layoutBox.MaxY + tolerance;
-    }
-
-    private static bool TryReadLayoutPanelSize(
-        IReadOnlyList<PanelGroup> layoutPanels,
+    private static bool TryReadPanelAssemblySize(
+        IReadOnlyList<PanelGroup> groupedPanels,
         out double width,
         out double height,
         out double? thickness
@@ -217,7 +191,7 @@ internal static class Program_V2
         height = 0.0;
         thickness = null;
 
-        if (layoutPanels.Count == 0)
+        if (groupedPanels.Count == 0)
         {
             return false;
         }
@@ -225,7 +199,7 @@ internal static class Program_V2
         try
         {
             CurrentDimensionValues current =
-                ReadCurrentDimensionValues(layoutPanels);
+                ReadCurrentDimensionValues(groupedPanels);
 
             width = current.Width;
             height = current.Height;
@@ -234,10 +208,10 @@ internal static class Program_V2
         }
         catch
         {
-            // 치수 객체가 없는 레이아웃은 패널 외곽 크기로 보완한다.
+            // 치수 객체가 없는 묶음은 패널 외곽 크기로 보완한다.
         }
 
-        PanelGroup? mainPanel = layoutPanels
+        PanelGroup? mainPanel = groupedPanels
             .Where(panel => !panel.IsThicknessPanel)
             .Where(panel => panel.BasePolyline.HasBoundingBox)
             .OrderByDescending(panel =>
@@ -254,7 +228,7 @@ internal static class Program_V2
         width = mainPanel.BasePolyline.Width;
         height = mainPanel.BasePolyline.Height;
 
-        foreach (PanelGroup thicknessPanel in layoutPanels
+        foreach (PanelGroup thicknessPanel in groupedPanels
             .Where(panel => panel.IsThicknessPanel))
         {
             DimensionValueInfo? dimension =
@@ -344,13 +318,10 @@ internal static class Program_V2
             (resizeInput.TargetThickness.HasValue
                 ? $"x{resizeInput.TargetThickness.Value:0.###}"
                 : string.Empty) +
-            "_v2.dwg"
+            ".dwg"
         );
 
         outputPath = GetAvailableOutputPath(outputPath);
-
-        // 판별에만 사용한 치구설정 박스는 결과 DWG에서 제거한다.
-        RemoveChiguSettingLayoutBoxes(drawingData);
 
         SaveAsNewDwg(
             document,
@@ -420,10 +391,10 @@ internal static class Program_V2
         IReadOnlyList<DwgLayoutResizeTarget> targets
     )
     {
-        List<YellowLayoutPanelContext> layouts =
-            FindYellowLayoutPanelContexts(
-                drawingData,
-                allPanelGroups
+        List<RecognizedPanelContext> recognizedPanels =
+            FindRecognizedPanelContexts(
+                allPanelGroups,
+                originalNestedVertex16Bindings
             );
 
         List<PanelGroup> activePanelGroups = allPanelGroups.ToList();
@@ -436,7 +407,8 @@ internal static class Program_V2
 
         foreach (DwgLayoutResizeTarget target in targets)
         {
-            YellowLayoutPanelContext? layout = layouts.FirstOrDefault(item =>
+            RecognizedPanelContext? panelContext =
+                recognizedPanels.FirstOrDefault(item =>
                 item.Sequence == target.Sequence &&
                 string.Equals(
                     item.LayoutName,
@@ -444,16 +416,17 @@ internal static class Program_V2
                     StringComparison.OrdinalIgnoreCase
                 ));
 
-            if (layout == null || layout.PanelGroups.Count == 0)
+            if (panelContext == null ||
+                panelContext.PanelGroups.Count == 0)
             {
                 throw new Exception(
-                    $"{target.LayoutName} {target.Sequence} 레이아웃의 " +
+                    $"{target.LayoutName} {target.Sequence}의 " +
                     "패널을 찾지 못했습니다. 파일을 새로고침한 뒤 다시 시도하세요."
                 );
             }
 
             List<PanelGroup> layoutPanelGroups =
-                layout.PanelGroups.ToList();
+                panelContext.PanelGroups.ToList();
             overriddenPanels.UnionWith(layoutPanelGroups);
             CurrentDimensionValues currentValues;
 
@@ -465,7 +438,7 @@ internal static class Program_V2
             catch (Exception ex)
             {
                 throw new Exception(
-                    $"{target.LayoutName} {target.Sequence} 레이아웃의 " +
+                    $"{target.LayoutName} {target.Sequence}의 " +
                     $"현재 치수를 읽지 못했습니다. {ex.Message}",
                     ex
                 );
@@ -474,19 +447,6 @@ internal static class Program_V2
             double? effectiveLayoutThickness =
                 target.TargetThickness ??
                 globalResizeInput.TargetThickness;
-
-            if (target.MinimumThickness.HasValue)
-            {
-                double thicknessBeforeLimit =
-                    effectiveLayoutThickness ??
-                    currentValues.Thickness ??
-                    target.MinimumThickness.Value;
-
-                effectiveLayoutThickness = Math.Max(
-                    thicknessBeforeLimit,
-                    target.MinimumThickness.Value
-                );
-            }
 
             ResizeInput resizeInput = new()
             {
@@ -684,220 +644,6 @@ internal static class Program_V2
             originalNestedVertex16Bindings,
             currentValues
         );
-    }
-
-    /*
-     * 이전 단일 파일 선택/입력창 기반 Main 흐름은 UI 일괄 처리 방식으로 교체했다.
-     * 실제 도면 수정 규칙은 ConvertDwgFileFromUi에서 동일한 순서로 호출한다.
-     */
-    private static void LegacySingleFileMainRemoved()
-    {
-        try
-        {
-            string? dwgPath = SelectDwgFile();
-
-            if (string.IsNullOrWhiteSpace(dwgPath))
-            {
-                return;
-            }
-
-            CadDocument document = DwgReader.Read(dwgPath);
-
-            DrawingData drawingData = ReadDrawingData(document);
-
-            string directory =
-                Path.GetDirectoryName(dwgPath)
-                ?? throw new Exception("선택한 DWG 파일의 폴더를 찾지 못했습니다.");
-
-            string fileName =
-                Path.GetFileNameWithoutExtension(dwgPath);
-
-            //도형 위치 출력 txt 파일
-            string reportPath = Path.Combine(
-                directory,
-                $"{fileName}_objects_v2.txt"
-            );
-
-            SaveEntityReport(
-                drawingData,
-                reportPath
-            );
-
-            // 패널 기준 객체:
-            // Layer="치구", POLYLINE 계열, 실제 표시 색상=흰색(ACI 7)
-            // 기준 폴리선의 외곽을 사방 30만큼 확장한 범위에
-            // 걸치는 모든 객체를 같은 패널로 묶는다.
-            List<PanelGroup> panelGroups = FindPanelGroups(
-                drawingData,
-                30.0
-            );
-
-            // 두께 패널은 도면에 있을 수도 있고 없을 수도 있다.
-            // 가로/세로 비율이 충분히 큰 패널만 선택적으로 두께 패널로 표시한다.
-            // 해당 조건을 만족하는 패널이 하나도 없어도 예외 없이 계속 진행한다.
-            ClassifyThicknessPanels(
-                panelGroups
-            );
-
-            // 크기 수정 전에 바깥 사각형 안에 닫힌 3~8꼭짓점 도형이 있는
-            // 패널과 그 안의
-            // 16꼭짓점 패널 관계를 기억한다. 재정렬할 때 둘을 같이 이동시킨다.
-            Dictionary<PanelGroup, List<PanelGroup>>
-                originalNestedVertex16Bindings =
-                    BindNestedVertex16Panels(
-                        panelGroups
-                            .Where(panel => !panel.IsThicknessPanel)
-                            .ToList()
-                    );
-
-            //패널안의 객체 출력 txt 파일
-            string panelReportPath = Path.Combine(
-                directory,
-                $"{fileName}_panels_v2.txt"
-            );
-
-            SavePanelGroupReport(
-                panelGroups,
-                panelReportPath
-            );
-
-            // 수정 UI에 표시할 현재값은 폴리선 크기가 아니라 DWG 치수값으로 읽는다.
-            // X/Y는 일반 패널 중 면적이 가장 큰 사각형 패널의 가로/세로 치수,
-            // 두께는 두께 패널에 포함된 짧은 방향 치수에서 가져온다.
-            CurrentDimensionValues currentValues =
-                ReadCurrentDimensionValues(panelGroups);
-
-            ResizeInput? resizeInput = ShowResizeInputDialog(
-                currentValues
-            );
-
-            if (resizeInput == null)
-            {
-                return;
-            }
-
-
-            // 목표 높이(두께)가 35 이하이면 두께 패널 묶음을 통째로 삭제한다.
-            // 기준 외곽뿐 아니라 빨간 박스, 치수 및 패널에 묶인 모든 객체를 제거하고
-            // 이후 크기 수정과 100 간격 재배치 대상에서도 제외한다.
-            double effectiveTargetThickness =
-                resizeInput.TargetThickness ??
-                currentValues.Thickness ??
-                double.PositiveInfinity;
-
-            bool thicknessPanelsRemoved =
-                effectiveTargetThickness <= 35.0;
-
-
-            if (thicknessPanelsRemoved)
-            {
-                RemoveThicknessPanelGroups(
-                    drawingData,
-                    panelGroups
-                );
-            }
-            // 흰색 치구 원 안에 볼트 구멍 레이어 원이 있는 관계를
-            // 도형 수정과 재배치 전에 기억한다.
-            List<ChiguCircleBoltBinding> chiguCircleBoltBindings =
-                FindChiguCircleBoltBindings(panelGroups);
-
-            ApplyPanelResize(
-                drawingData,
-                panelGroups,
-                currentValues,
-                resizeInput
-            );
-
-            // 패널 간격 계산에 수정된 치구 원 크기도 반영되게
-            // 재배치 전에 먼저 목표 지름과 볼트 중심을 적용한다.
-            ResizeChiguCirclesAroundBoltHoles(
-                chiguCircleBoltBindings,
-                resizeInput.TargetWidth,
-                resizeInput.TargetHeight
-            );
-
-            // 크기와 치수 수정이 끝난 뒤, 현재 패널 외곽 기준으로
-            // 왼쪽부터 패널 사이 간격을 정확히 100으로 재배치한다.
-            ArrangePanelGroupsWithGap(
-                panelGroups,
-                100.0,
-                originalNestedVertex16Bindings
-            );
-
-            // 재배치가 모두 끝난 최종 볼트 구멍 중심을 기준으로
-            // 기존 흰색 치구 원의 중심과 지름을 다시 설정한다.
-            ResizeChiguCirclesAroundBoltHoles(
-                chiguCircleBoltBindings,
-                resizeInput.TargetWidth,
-                resizeInput.TargetHeight
-            );
-
-            ShowBoltHoleClearanceWarnings(
-                panelGroups,
-                3.9
-            );
-
-            string outputPath = Path.Combine(
-                directory,
-                $"{fileName}_{resizeInput.TargetWidth:0.###}x" +
-                $"{resizeInput.TargetHeight:0.###}" +
-                (resizeInput.TargetThickness.HasValue
-                    ? $"x{resizeInput.TargetThickness.Value:0.###}"
-                    : string.Empty) +
-                "_v2.dwg"
-            );
-
-            outputPath = GetAvailableOutputPath(outputPath);
-
-            SaveAsNewDwg(
-                document,
-                outputPath
-            );
-
-            MessageBox.Show(
-                "크기 및 치수 수정 완료\n\n" +
-                $"저장 위치: {outputPath}\n\n" +
-                $"X: {currentValues.Width:0.###} → {resizeInput.TargetWidth:0.###}\n" +
-                $"Y: {currentValues.Height:0.###} → {resizeInput.TargetHeight:0.###}\n" +
-                (thicknessPanelsRemoved
-                    ? "두께: 목표값 35 이하 — 두께 패널 삭제"
-                    : resizeInput.TargetThickness.HasValue && currentValues.Thickness.HasValue
-                        ? $"두께: {currentValues.Thickness.Value:0.###} → {resizeInput.TargetThickness.Value:0.###}"
-                        : "두께 패널 없음"),
-                "완료",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Information
-            );
-        }
-        catch (Exception ex)
-        {
-            MessageBox.Show(
-                ex.ToString(),
-                "오류",
-                MessageBoxButtons.OK,
-                MessageBoxIcon.Error
-            );
-        }
-    }
-
-    /// <summary>
-    /// 사용자가 처리할 DWG 파일 하나를 선택한다.
-    /// </summary>
-    private static string? SelectDwgFile()
-    {
-        using OpenFileDialog dialog = new()
-        {
-            Title = "수정할 DWG 파일 선택",
-            Filter = "AutoCAD DWG 파일 (*.dwg)|*.dwg|모든 파일 (*.*)|*.*",
-            Multiselect = false,
-            CheckFileExists = true,
-            CheckPathExists = true,
-            RestoreDirectory = true
-        };
-
-        return dialog.ShowDialog() == DialogResult.OK
-            ? dialog.FileName
-            : null;
     }
 
     /// <summary>
@@ -2474,478 +2220,6 @@ internal static class Program_V2
             ? DimensionDirection.Horizontal
             : DimensionDirection.Vertical;
     }
-
-    private static ResizeInput? ShowResizeInputDialog(
-        CurrentDimensionValues current
-    )
-    {
-        using Form form = new()
-        {
-            Text = "수정할 크기 입력",
-            Width = 420,
-            Height = 350,
-            StartPosition = FormStartPosition.CenterScreen,
-            FormBorderStyle = FormBorderStyle.FixedDialog,
-            MaximizeBox = false,
-            MinimizeBox = false
-        };
-
-        Label currentLabel = new()
-        {
-            Left = 25,
-            Top = 20,
-            Width = 360,
-            Height = 42,
-            Text = current.Thickness.HasValue
-                ? $"현재 치수: {current.Width:0.###} x {current.Height:0.###} x {current.Thickness.Value:0.###}"
-                : $"현재 치수: {current.Width:0.###} x {current.Height:0.###} x 두께 패널 없음"
-        };
-
-        Label widthLabel = new()
-        {
-            Left = 25,
-            Top = 85,
-            Width = 110,
-            Text = "목표 X(가로)"
-        };
-
-        NumericUpDown widthInput = CreateSizeInput(
-            150,
-            80,
-            current.Width
-        );
-
-        Label heightLabel = new()
-        {
-            Left = 25,
-            Top = 130,
-            Width = 110,
-            Text = "목표 Y(세로)"
-        };
-
-        NumericUpDown heightInput = CreateSizeInput(
-            150,
-            125,
-            current.Height
-        );
-
-        Label thicknessLabel = new()
-        {
-            Left = 25,
-            Top = 175,
-            Width = 110,
-            Text = "목표 높이(두께)"
-        };
-
-        NumericUpDown thicknessInput = CreateSizeInput(
-            150,
-            170,
-            current.Thickness ?? 0.001
-        );
-
-        if (!current.Thickness.HasValue)
-        {
-            thicknessInput.Enabled = false;
-            thicknessLabel.Text = "두께 패널 없음";
-        }
-
-        Button okButton = new()
-        {
-            Left = 170,
-            Top = 245,
-            Width = 90,
-            Height = 34,
-            Text = "확인",
-            DialogResult = DialogResult.OK
-        };
-
-        Button cancelButton = new()
-        {
-            Left = 270,
-            Top = 245,
-            Width = 90,
-            Height = 34,
-            Text = "취소",
-            DialogResult = DialogResult.Cancel
-        };
-
-        form.Controls.AddRange(
-        [
-            currentLabel,
-            widthLabel,
-            widthInput,
-            heightLabel,
-            heightInput,
-            thicknessLabel,
-            thicknessInput,
-            okButton,
-            cancelButton
-        ]);
-
-        form.AcceptButton = okButton;
-        form.CancelButton = cancelButton;
-
-        if (form.ShowDialog() != DialogResult.OK)
-        {
-            return null;
-        }
-
-        return new ResizeInput
-        {
-            TargetWidth = (double)widthInput.Value,
-            TargetHeight = (double)heightInput.Value,
-            TargetThickness = current.Thickness.HasValue
-                ? (double)thicknessInput.Value
-                : null
-        };
-    }
-
-    private static NumericUpDown CreateSizeInput(
-        int left,
-        int top,
-        double currentValue
-    )
-    {
-        decimal safeValue = (decimal)Math.Clamp(
-            currentValue,
-            0.001,
-            1000000.0
-        );
-
-        return new NumericUpDown
-        {
-            Left = left,
-            Top = top,
-            Width = 210,
-            DecimalPlaces = 3,
-            Minimum = 0.001m,
-            Maximum = 1000000m,
-            Increment = 1m,
-            Value = safeValue
-        };
-    }
-
-
-
-    private sealed class BoltHoleCircleGroup
-    {
-        public required List<EntityData> Circles { get; init; }
-
-        public double CenterX => Circles[0].CenterX;
-        public double CenterY => Circles[0].CenterY;
-        public int CircleCount => Circles.Count;
-    }
-
-    /// <summary>
-    /// 한 패널의 같은 Y축 줄에 중심이 같은 볼트 구멍 그룹이 정확히 4개 있을 때 처리한다.
-    /// 중심당 원이 2개인 2·2·2·2 형식은 목표 가로 120을 기준으로,
-    /// 중심당 원이 3개인 3·3·3·3 형식은 목표 가로 140을 기준으로 처리한다.
-    /// 기준 이하이면 바깥 2그룹, 기준 초과이면 중심에 가까운 2그룹을
-    /// 삭제 후보로 모은다. 후보가 하나 이상이면 확인창을 한 번 표시하고,
-    /// 사용자가 '예'를 선택한 경우에만 실제 삭제한다.
-    /// </summary>
-    private static void SelectBoltHolePairsByTargetWidth(
-        DrawingData drawingData,
-        IReadOnlyList<PanelGroup> panelGroups,
-        double targetWidth,
-        double centerTolerance = 0.001,
-        double yTolerance = 0.001
-    )
-    {
-        List<(PanelGroup Panel, BoltHoleCircleGroup Group)>
-            deletionCandidates = new();
-
-        HashSet<string> candidateGroupKeys = new(
-            StringComparer.OrdinalIgnoreCase
-        );
-
-        foreach (PanelGroup panel in panelGroups)
-        {
-            List<EntityData> boltCircles = panel.Entities
-                .Where(entity =>
-                    string.Equals(
-                        entity.LayerName,
-                        "볼트 구멍",
-                        StringComparison.OrdinalIgnoreCase
-                    ))
-                .Where(entity => entity.Entity is Circle)
-                .GroupBy(entity => entity.Handle)
-                .Select(group => group.First())
-                .ToList();
-
-            if (boltCircles.Count < 8)
-            {
-                continue;
-            }
-
-            List<BoltHoleCircleGroup> centerGroups =
-                BuildBoltHoleCenterGroups(
-                    boltCircles,
-                    centerTolerance
-                )
-                .Where(group =>
-                    group.CircleCount == 2 ||
-                    group.CircleCount == 3)
-                .ToList();
-
-            if (centerGroups.Count < 4)
-            {
-                continue;
-            }
-
-            List<List<BoltHoleCircleGroup>> yRows = new();
-
-            foreach (BoltHoleCircleGroup group in centerGroups
-                .OrderBy(item => item.CenterY)
-                .ThenBy(item => item.CenterX))
-            {
-                List<BoltHoleCircleGroup>? matchingRow =
-                    yRows.FirstOrDefault(row =>
-                        Math.Abs(row[0].CenterY - group.CenterY)
-                            <= yTolerance
-                    );
-
-                if (matchingRow == null)
-                {
-                    matchingRow = new List<BoltHoleCircleGroup>();
-                    yRows.Add(matchingRow);
-                }
-
-                matchingRow.Add(group);
-            }
-
-            DimensionBounds panelBounds =
-                GetCurrentBounds(panel.BasePolyline.Entity);
-
-            double panelCenterX =
-                (panelBounds.MinX + panelBounds.MaxX) / 2.0;
-
-            foreach (List<BoltHoleCircleGroup> row in yRows
-                .Where(row => row.Count == 4))
-            {
-                bool isTwoCirclePattern =
-                    row.All(group => group.CircleCount == 2);
-
-                bool isThreeCirclePattern =
-                    row.All(group => group.CircleCount == 3);
-
-                if (!isTwoCirclePattern &&
-                    !isThreeCirclePattern)
-                {
-                    continue;
-                }
-
-                double widthThreshold =
-                    isThreeCirclePattern
-                        ? 140.0
-                        : 120.0;
-
-                List<BoltHoleCircleGroup> orderedByCenterDistance = row
-                    .OrderBy(group =>
-                        Math.Abs(group.CenterX - panelCenterX))
-                    .ToList();
-
-                List<BoltHoleCircleGroup> groupsToDelete =
-                    targetWidth <= widthThreshold
-                        ? orderedByCenterDistance
-                            .Skip(2)
-                            .Take(2)
-                            .ToList()
-                        : orderedByCenterDistance
-                            .Take(2)
-                            .ToList();
-
-
-                foreach (BoltHoleCircleGroup group in groupsToDelete)
-                {
-                    string groupKey = string.Join(
-                        "|",
-                        group.Circles
-                            .Select(circle => circle.Handle)
-                            .OrderBy(handle => handle,
-                                StringComparer.OrdinalIgnoreCase)
-                    );
-
-                    if (candidateGroupKeys.Add(groupKey))
-                    {
-                        deletionCandidates.Add((panel, group));
-                    }
-                }
-            }
-        }
-
-        if (deletionCandidates.Count == 0)
-        {
-            return;
-        }
-
-        int candidateCircleCount = deletionCandidates
-            .SelectMany(candidate => candidate.Group.Circles)
-            .Select(circle => circle.Handle)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .Count();
-
-        string panelNumbers = string.Join(
-            ", ",
-            deletionCandidates
-                .Select(candidate => candidate.Panel.Number)
-                .Distinct()
-                .OrderBy(number => number)
-        );
-
-        DialogResult deleteResult = MessageBox.Show(
-            "일자로 배치된 볼트 구멍 중 기존 크기 규칙에 따른 " +
-            "삭제 후보가 발견되었습니다.\n\n" +
-            $"대상 패널: {panelNumbers}\n" +
-            $"삭제 후보: {deletionCandidates.Count}쌍 " +
-            $"(원 {candidateCircleCount}개)\n" +
-            $"목표 가로: {targetWidth:0.###}\n\n" +
-            "삭제하시겠습니까?\n\n" +
-            "예: 후보 볼트 구멍 삭제\n" +
-            "아니요: 삭제하지 않고 그대로 유지",
-            "볼트 구멍 삭제 확인",
-            MessageBoxButtons.YesNo,
-            MessageBoxIcon.Warning,
-            MessageBoxDefaultButton.Button2
-        );
-
-        if (deleteResult != DialogResult.Yes)
-        {
-            return;
-        }
-
-        HashSet<string> deletedCircleHandles = new(
-            StringComparer.OrdinalIgnoreCase
-        );
-
-        foreach (var candidate in deletionCandidates)
-        {
-            foreach (EntityData circleData in candidate.Group.Circles)
-            {
-                if (!deletedCircleHandles.Add(circleData.Handle))
-                {
-                    continue;
-                }
-
-                RemoveEntityFromDrawing(
-                    drawingData,
-                    circleData
-                );
-
-                // 혹시 같은 원이 다른 패널 구성원에도 들어 있으면
-                // 모든 패널 목록에서 함께 제거한다.
-                foreach (PanelGroup targetPanel in panelGroups)
-                {
-                    targetPanel.Entities.RemoveAll(entity =>
-                        string.Equals(
-                            entity.Handle,
-                            circleData.Handle,
-                            StringComparison.OrdinalIgnoreCase
-                        )
-                    );
-                }
-            }
-        }
-
-    }
-
-    private static List<BoltHoleCircleGroup> BuildBoltHoleCenterGroups(
-        IReadOnlyList<EntityData> circles,
-        double centerTolerance
-    )
-    {
-        List<BoltHoleCircleGroup> result = new();
-        HashSet<string> usedHandles = new(
-            StringComparer.OrdinalIgnoreCase
-        );
-
-        foreach (EntityData seed in circles)
-        {
-            if (usedHandles.Contains(seed.Handle))
-            {
-                continue;
-            }
-
-            List<EntityData> sameCenter = circles
-                .Where(candidate =>
-                    !usedHandles.Contains(candidate.Handle))
-                .Where(candidate =>
-                    Math.Abs(candidate.CenterX - seed.CenterX)
-                        <= centerTolerance &&
-                    Math.Abs(candidate.CenterY - seed.CenterY)
-                        <= centerTolerance)
-                .OrderByDescending(candidate => candidate.Radius)
-                .ToList();
-
-            List<EntityData> distinctRadiusCircles = new();
-
-            foreach (EntityData candidate in sameCenter)
-            {
-                bool duplicateRadius =
-                    distinctRadiusCircles.Any(existing =>
-                        Math.Abs(existing.Radius - candidate.Radius)
-                            <= 0.000001
-                    );
-
-                if (!duplicateRadius)
-                {
-                    distinctRadiusCircles.Add(candidate);
-                }
-            }
-
-            if (distinctRadiusCircles.Count < 2)
-            {
-                continue;
-            }
-
-            foreach (EntityData item in sameCenter)
-            {
-                usedHandles.Add(item.Handle);
-            }
-
-            result.Add(new BoltHoleCircleGroup
-            {
-                Circles = distinctRadiusCircles
-            });
-        }
-
-        return result;
-    }
-
-    private static void RemoveEntityFromDrawing(
-        DrawingData drawingData,
-        EntityData entityData
-    )
-    {
-        Entity entity = entityData.Entity;
-
-        if (drawingData.Document.Entities.Contains(entity))
-        {
-            drawingData.Document.Entities.Remove(entity);
-        }
-        else
-        {
-            foreach (var blockRecord in drawingData.Document.BlockRecords)
-            {
-                if (!blockRecord.Entities.Contains(entity))
-                {
-                    continue;
-                }
-
-                blockRecord.Entities.Remove(entity);
-                break;
-            }
-        }
-
-        drawingData.Entities.RemoveAll(item =>
-            string.Equals(
-                item.Handle,
-                entityData.Handle,
-                StringComparison.OrdinalIgnoreCase
-            )
-        );
-    }
-
 
     /// <summary>
     /// 목표 높이가 35 이하일 때 두께 패널 묶음을 DWG에서 삭제한다.
@@ -5357,274 +4631,6 @@ internal static class Program_V2
     }
 
     /// <summary>
-    /// 생성된 DWG와 같은 폴더에 원본/수정 후 구성요소 보고서를 저장한다.
-    /// 원본 보고서는 도면 수정 전에 만든 문자열을 사용하므로 실제 입력
-    /// 파일 상태와 새 CadDocument 상태를 서로 비교할 수 있다.
-    /// </summary>
-    private static void SaveDocumentComponentReports(
-        string outputDwgPath,
-        string originalDocumentComponentReport,
-        CadDocument cleanDocument
-    )
-    {
-        string outputDirectory =
-            Path.GetDirectoryName(outputDwgPath)
-            ?? throw new Exception(
-                "출력 DWG 파일의 폴더를 찾지 못했습니다."
-            );
-
-        string outputFileName =
-            Path.GetFileNameWithoutExtension(outputDwgPath);
-
-        string originalReportPath = Path.Combine(
-            outputDirectory,
-            $"{outputFileName}_원본_구성요소.txt"
-        );
-
-        string modifiedReportPath = Path.Combine(
-            outputDirectory,
-            $"{outputFileName}_수정후_구성요소.txt"
-        );
-
-        File.WriteAllText(
-            originalReportPath,
-            originalDocumentComponentReport,
-            new UTF8Encoding(true)
-        );
-
-        File.WriteAllText(
-            modifiedReportPath,
-            BuildDocumentComponentReport(
-                cleanDocument,
-                "수정 후 새 도면"
-            ),
-            new UTF8Encoding(true)
-        );
-    }
-
-    /// <summary>
-    /// 프록시 경고 원인을 비교할 수 있도록 문서의 DXF 클래스, 테이블,
-    /// Layout, BlockRecord 및 각 공간의 엔티티를 한 보고서로 만든다.
-    /// </summary>
-    private static string BuildDocumentComponentReport(
-        CadDocument document,
-        string reportTitle
-    )
-    {
-        StringBuilder builder = new();
-
-        builder.AppendLine($"===== {reportTitle} 구성요소 =====");
-        builder.AppendLine($"작성 시각: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
-        builder.AppendLine($"DWG 버전: {document.Header.Version}");
-        builder.AppendLine($"코드 페이지: {document.Header.CodePage}");
-        builder.AppendLine($"Handle Seed: {document.Header.HandleSeed:X}");
-        builder.AppendLine();
-
-        WriteDxfClassReport(builder, document);
-        WriteTableReport(builder, document);
-        WriteLayoutReport(builder, document);
-        WriteBlockAndEntityReport(builder, document);
-
-        return builder.ToString();
-    }
-
-    private static void WriteDxfClassReport(
-        StringBuilder builder,
-        CadDocument document
-    )
-    {
-        builder.AppendLine("[DXF CLASS / 프록시 확인]");
-        builder.AppendLine($"CLASS 수: {document.Classes.Count}");
-
-        int index = 0;
-        foreach (ACadSharp.Classes.DxfClass dxfClass in
-            document.Classes.OrderBy(item => item.ClassNumber))
-        {
-            builder.AppendLine(
-                $"  [{index++}] Number={dxfClass.ClassNumber}, " +
-                $"DXF={dxfClass.DxfName}, " +
-                $"C++={dxfClass.CppClassName}, " +
-                $"Application={dxfClass.ApplicationName}, " +
-                $"Instances={dxfClass.InstanceCount}, " +
-                $"Entity={dxfClass.IsAnEntity}, " +
-                $"WasProxy={dxfClass.WasZombie}, " +
-                $"ProxyFlags={dxfClass.ProxyFlags}, " +
-                $"Version={dxfClass.DwgVersion}"
-            );
-        }
-
-        builder.AppendLine();
-    }
-
-    private static void WriteTableReport(
-        StringBuilder builder,
-        CadDocument document
-    )
-    {
-        builder.AppendLine("[TABLE 요약]");
-        builder.AppendLine($"레이어: {document.Layers.Count}");
-        foreach (Layer layer in document.Layers.OrderBy(item => item.Name))
-        {
-            builder.AppendLine(
-                $"  Layer: Name={layer.Name}, " +
-                $"Handle={layer.Handle:X}, " +
-                $"Color={layer.Color.Index}, " +
-                $"LineType={layer.LineType?.Name ?? "(없음)"}"
-            );
-        }
-
-        builder.AppendLine($"선종류: {document.LineTypes.Count}");
-        foreach (LineType lineType in
-            document.LineTypes.OrderBy(item => item.Name))
-        {
-            builder.AppendLine(
-                $"  LineType: Name={lineType.Name}, " +
-                $"Handle={lineType.Handle:X}"
-            );
-        }
-
-        builder.AppendLine($"문자 스타일: {document.TextStyles.Count}");
-        foreach (TextStyle textStyle in
-            document.TextStyles.OrderBy(item => item.Name))
-        {
-            builder.AppendLine(
-                $"  TextStyle: Name={textStyle.Name}, " +
-                $"Handle={textStyle.Handle:X}, " +
-                $"Height={textStyle.Height:0.######}, " +
-                $"LastHeight={textStyle.LastHeight:0.######}, " +
-                $"Width={textStyle.Width:0.######}, " +
-                $"Font={textStyle.Filename}, " +
-                $"BigFont={textStyle.BigFontFilename}"
-            );
-        }
-
-        builder.AppendLine($"치수 스타일: {document.DimensionStyles.Count}");
-        foreach (DimensionStyle dimensionStyle in
-            document.DimensionStyles.OrderBy(item => item.Name))
-        {
-            builder.AppendLine(
-                $"  DimStyle: Name={dimensionStyle.Name}, " +
-                $"Handle={dimensionStyle.Handle:X}, " +
-                $"TextStyle={dimensionStyle.Style?.Name ?? "(없음)"}, " +
-                $"TextHeight={dimensionStyle.TextHeight:0.######}, " +
-                $"ArrowSize={dimensionStyle.ArrowSize:0.######}, " +
-                $"ScaleFactor={dimensionStyle.ScaleFactor:0.######}, " +
-                $"LineType={dimensionStyle.LineType?.Name ?? "(없음)"}, " +
-                $"ArrowBlock={dimensionStyle.ArrowBlock?.Name ?? "(없음)"}"
-            );
-        }
-
-        builder.AppendLine($"블록 레코드: {document.BlockRecords.Count}");
-        builder.AppendLine($"등록 앱: {document.AppIds.Count}");
-        builder.AppendLine($"UCS: {document.UCSs.Count}");
-        builder.AppendLine($"View: {document.Views.Count}");
-        builder.AppendLine($"VPort: {document.VPorts.Count}");
-        builder.AppendLine();
-    }
-
-    private static void WriteLayoutReport(
-        StringBuilder builder,
-        CadDocument document
-    )
-    {
-        builder.AppendLine("[LAYOUT]");
-
-        List<Layout> layouts = document.Layouts?.ToList()
-            ?? new List<Layout>();
-
-        builder.AppendLine($"Layout 수: {layouts.Count}");
-        foreach (Layout layout in layouts.OrderBy(item => item.TabOrder))
-        {
-            builder.AppendLine(
-                $"  Name={layout.Name}, " +
-                $"Handle={layout.Handle:X}, " +
-                $"TabOrder={layout.TabOrder}, " +
-                $"PaperSpace={layout.IsPaperSpace}, " +
-                $"Block={layout.AssociatedBlock?.Name ?? "(없음)"}, " +
-                $"EntityCount={layout.AssociatedBlock?.Entities.Count ?? 0}"
-            );
-        }
-
-        builder.AppendLine();
-    }
-
-    private static void WriteBlockAndEntityReport(
-        StringBuilder builder,
-        CadDocument document
-    )
-    {
-        builder.AppendLine("[BLOCK / ENTITY]");
-
-        foreach (BlockRecord block in
-            document.BlockRecords.OrderBy(item => item.Name))
-        {
-            builder.AppendLine(
-                $"Block: Name={block.Name}, " +
-                $"Handle={block.Handle:X}, " +
-                $"EntityCount={block.Entities.Count}"
-            );
-
-            foreach (IGrouping<string, Entity> group in
-                block.Entities
-                    .GroupBy(entity => entity.ObjectName)
-                    .OrderBy(group => group.Key))
-            {
-                builder.AppendLine(
-                    $"  종류 합계: {group.Key} = {group.Count()}"
-                );
-            }
-
-            int entityIndex = 0;
-            foreach (Entity entity in block.Entities)
-            {
-                builder.Append(
-                    $"  [{entityIndex++}] " +
-                    $"DXF={entity.ObjectName}, " +
-                    $"CLR={entity.GetType().FullName}, " +
-                    $"Handle={entity.Handle:X}, " +
-                    $"Layer={entity.Layer?.Name ?? "(없음)"}, " +
-                    $"Color={entity.Color.Index}"
-                );
-
-                switch (entity)
-                {
-                    case TextEntity text:
-                        builder.Append(
-                            $", TextStyle={text.Style?.Name ?? "(없음)"}, " +
-                            $"Height={text.Height:0.######}"
-                        );
-                        break;
-
-                    case MText mText:
-                        builder.Append(
-                            $", TextStyle={mText.Style?.Name ?? "(없음)"}, " +
-                            $"Height={mText.Height:0.######}"
-                        );
-                        break;
-
-                    case Dimension dimension:
-                        builder.Append(
-                            $", DimStyle={dimension.Style?.Name ?? "(없음)"}, " +
-                            $"Measurement={dimension.Measurement:0.######}, " +
-                            $"DimBlock={dimension.Block?.Name ?? "(없음)"}"
-                        );
-                        break;
-
-                    case Insert insert:
-                        builder.Append(
-                            $", InsertBlock={insert.Block?.Name ?? "(없음)"}"
-                        );
-                        break;
-                }
-
-                builder.AppendLine();
-            }
-
-            builder.AppendLine();
-        }
-    }
-
-    /// <summary>
     /// 수정 결과에서 실제로 사용하는 객체만 새 CadDocument로 옮긴다.
     /// Clone된 객체는 Handle과 Owner가 초기화되며 새 문서에 추가될 때
     /// Layer, LineType, DimensionStyle 및 BlockRecord가 새로 등록된다.
@@ -6632,11 +5638,10 @@ internal static class Program_V2
         public required List<EntityData> Entities { get; init; }
     }
 
-    private sealed class YellowLayoutPanelContext
+    private sealed class RecognizedPanelContext
     {
         public string LayoutName { get; init; } = string.Empty;
         public int Sequence { get; init; }
-        public required EntityData LayoutBox { get; init; }
         public required List<PanelGroup> PanelGroups { get; init; }
     }
 

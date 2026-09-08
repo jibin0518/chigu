@@ -2265,7 +2265,11 @@ internal sealed class ResizeMainForm : Form
                 ConversionThicknessTextBox.Text.Trim(),
                 "목표 두께"
             );
-            layoutTargets = ReadAdvancedLayoutTargets();
+            layoutTargets = ReadAdvancedLayoutTargets(
+                targetWidth,
+                targetHeight,
+                targetThickness
+            );
         }
         catch (Exception ex)
         {
@@ -2455,7 +2459,7 @@ internal sealed class ResizeMainForm : Form
                     out var sizes
                 ) || sizes.Count == 0)
             {
-                AddLayoutMessageRow("치구설정 박스 없음");
+                AddLayoutMessageRow("인식된 치구 패널 없음");
                 return;
             }
 
@@ -2472,13 +2476,7 @@ internal sealed class ResizeMainForm : Form
 
             foreach (DwgLayoutSizeSnapshot size in sizes)
             {
-                string displayBaseName = string.Equals(
-                    size.LayoutName,
-                    "치구설정",
-                    StringComparison.OrdinalIgnoreCase
-                )
-                    ? "치구"
-                    : size.LayoutName;
+                string displayBaseName = size.LayoutName;
 
                 string displayName = counts[size.LayoutName] > 1
                     ? $"{displayBaseName} {size.Sequence}"
@@ -2566,7 +2564,8 @@ internal sealed class ResizeMainForm : Form
             FormatValue(size.Height)
         );
         TextBox thicknessInput = CreateLayoutSizeInput(
-            FormatNullableValue(size.Thickness)
+            FormatNullableValue(size.Thickness),
+            size.Thickness.HasValue
         );
 
         TableLayoutPanel rowLayout = CreateLayoutSizeGridLayout();
@@ -2581,6 +2580,7 @@ internal sealed class ResizeMainForm : Form
             LayoutName = size.LayoutName,
             Sequence = size.Sequence,
             DisplayName = displayName,
+            HasThickness = size.Thickness.HasValue,
             WidthTextBox = widthInput,
             HeightTextBox = heightInput,
             ThicknessTextBox = thicknessInput
@@ -2610,27 +2610,38 @@ internal sealed class ResizeMainForm : Form
         EventArgs e
     )
     {
-        foreach (TextBox input in _layoutSizeInputRows.SelectMany(row =>
-            new[]
-            {
-                row.WidthTextBox,
-                row.HeightTextBox,
-                row.ThicknessTextBox
-            }))
+        foreach (LayoutSizeInputRow row in _layoutSizeInputRows)
         {
             bool canEdit = AdvancedSettingsEditCheckBox.Checked;
 
-            input.Enabled = canEdit;
-            input.TabStop = canEdit;
-            input.BackColor = canEdit
-                ? Color.White
-                : Color.FromArgb(238, 241, 245);
+            SetAdvancedLayoutInputEnabled(row.WidthTextBox, canEdit);
+            SetAdvancedLayoutInputEnabled(row.HeightTextBox, canEdit);
+            SetAdvancedLayoutInputEnabled(
+                row.ThicknessTextBox,
+                canEdit && row.HasThickness
+            );
         }
     }
 
-    private TextBox CreateLayoutSizeInput(string currentValue)
+    private static void SetAdvancedLayoutInputEnabled(
+        TextBox input,
+        bool enabled
+    )
     {
-        bool canEdit = AdvancedSettingsEditCheckBox.Checked;
+        input.Enabled = enabled;
+        input.TabStop = enabled;
+        input.BackColor = enabled
+            ? Color.White
+            : Color.FromArgb(238, 241, 245);
+    }
+
+    private TextBox CreateLayoutSizeInput(
+        string currentValue,
+        bool valueAvailable = true
+    )
+    {
+        bool canEdit =
+            valueAvailable && AdvancedSettingsEditCheckBox.Checked;
 
         TextBox input = new()
         {
@@ -2721,7 +2732,9 @@ internal sealed class ResizeMainForm : Form
                 row.WidthTextBox.Text = saved.Width ?? string.Empty;
                 row.HeightTextBox.Text = saved.Height ?? string.Empty;
                 row.ThicknessTextBox.Text =
-                    saved.Thickness ?? string.Empty;
+                    row.HasThickness
+                        ? saved.Thickness ?? string.Empty
+                        : string.Empty;
             }
         }
         finally
@@ -2738,7 +2751,11 @@ internal sealed class ResizeMainForm : Form
             !string.IsNullOrWhiteSpace(row.ThicknessTextBox.Text));
     }
 
-    private List<DwgLayoutResizeTarget> ReadAdvancedLayoutTargets()
+    private List<DwgLayoutResizeTarget> ReadAdvancedLayoutTargets(
+        double globalTargetWidth,
+        double globalTargetHeight,
+        double? globalTargetThickness
+    )
     {
         if (!AdvancedSettingsEditCheckBox.Checked)
         {
@@ -2757,25 +2774,25 @@ internal sealed class ResizeMainForm : Form
 
         foreach (LayoutSizeInputRow row in _layoutSizeInputRows)
         {
-            double? width = ReadOptionalPositiveValue(
+            double? width = ReadAdvancedValue(
                 row.WidthTextBox.Text.Trim(),
-                $"{row.DisplayName} 가로"
+                $"{row.DisplayName} 가로",
+                globalTargetWidth
             );
-            double? height = ReadOptionalPositiveValue(
+            double? height = ReadAdvancedValue(
                 row.HeightTextBox.Text.Trim(),
-                $"{row.DisplayName} 세로"
+                $"{row.DisplayName} 세로",
+                globalTargetHeight
             );
-            ReadAdvancedThicknessValue(
+            double? thickness = ReadAdvancedValue(
                 row.ThicknessTextBox.Text.Trim(),
                 $"{row.DisplayName} 두께",
-                out double? thickness,
-                out double? minimumThickness
+                globalTargetThickness
             );
 
             if (!width.HasValue &&
                 !height.HasValue &&
-                !thickness.HasValue &&
-                !minimumThickness.HasValue)
+                !thickness.HasValue)
             {
                 continue;
             }
@@ -2786,60 +2803,192 @@ internal sealed class ResizeMainForm : Form
                 Sequence = row.Sequence,
                 TargetWidth = width,
                 TargetHeight = height,
-                TargetThickness = thickness,
-                MinimumThickness = minimumThickness
+                TargetThickness = thickness
             });
         }
 
         return targets;
     }
 
-    private static void ReadAdvancedThicknessValue(
+    private static double? ReadAdvancedValue(
         string text,
         string fieldName,
-        out double? exactValue,
-        out double? minimumValue
+        double? globalTargetValue
     )
     {
-        exactValue = null;
-        minimumValue = null;
-
         string valueText = text.Trim();
 
         if (string.IsNullOrWhiteSpace(valueText))
         {
-            return;
+            return null;
         }
 
-        // "70<"는 70 < 목표값, ">70"은 목표값 > 70을 뜻한다.
-        // 두 표기 모두 실제 계산에서는 두께가 70 아래로 내려가지 않게 한다.
-        if (valueText.EndsWith("<", StringComparison.Ordinal))
+        string[] tokens = valueText.Split(
+            new[] { ',', ' ', '\t', '\r', '\n' },
+            StringSplitOptions.RemoveEmptyEntries |
+            StringSplitOptions.TrimEntries
+        );
+
+        if (tokens.Length == 0)
         {
-            minimumValue = ReadRequiredPositiveValue(
-                valueText[..^1].Trim(),
-                fieldName
-            );
-            return;
+            return null;
         }
 
-        if (valueText.StartsWith(">", StringComparison.Ordinal))
+        double? result = globalTargetValue;
+        double? minimum = null;
+        double? maximum = null;
+
+        foreach (string token in tokens)
         {
-            minimumValue = ReadRequiredPositiveValue(
-                valueText[1..].Trim(),
-                fieldName
-            );
-            return;
+            bool isMinimum =
+                token.EndsWith("<", StringComparison.Ordinal) ||
+                token.StartsWith(">", StringComparison.Ordinal);
+
+            bool isMaximum =
+                token.StartsWith("<", StringComparison.Ordinal) ||
+                token.EndsWith(">", StringComparison.Ordinal);
+
+            if (isMinimum || isMaximum)
+            {
+                string limitText =
+                    token.StartsWith("<", StringComparison.Ordinal) ||
+                    token.StartsWith(">", StringComparison.Ordinal)
+                        ? token[1..].Trim()
+                        : token[..^1].Trim();
+
+                if (limitText.Contains('<') || limitText.Contains('>'))
+                {
+                    throw CreateAdvancedValueFormatException(
+                        fieldName,
+                        text
+                    );
+                }
+
+                double limit = ReadRequiredPositiveValue(
+                    limitText,
+                    fieldName
+                );
+
+                if (isMinimum)
+                {
+                    minimum = minimum.HasValue
+                        ? Math.Max(minimum.Value, limit)
+                        : limit;
+                }
+                else
+                {
+                    maximum = maximum.HasValue
+                        ? Math.Min(maximum.Value, limit)
+                        : limit;
+                }
+
+                continue;
+            }
+
+            if (token.Contains('<') || token.Contains('>'))
+            {
+                throw CreateAdvancedValueFormatException(fieldName, text);
+            }
+
+            char operation = token[0];
+
+            if (operation is '+' or '-' or '*' or '/')
+            {
+                double operand = ReadRequiredPositiveValue(
+                    token[1..].Trim(),
+                    fieldName
+                );
+
+                double baseValue = RequireAdvancedBaseValue(
+                    result,
+                    fieldName,
+                    text
+                );
+
+                result = operation switch
+                {
+                    '+' => baseValue + operand,
+                    '-' => baseValue - operand,
+                    '*' => baseValue * operand,
+                    '/' => baseValue / operand,
+                    _ => baseValue
+                };
+
+                if (!double.IsFinite(result.Value) || result.Value <= 0.0)
+                {
+                    throw new Exception(
+                        $"{fieldName} 계산 결과는 0보다 커야 합니다: '{text}'"
+                    );
+                }
+
+                continue;
+            }
+
+            result = ReadRequiredPositiveValue(token, fieldName);
         }
 
-        if (valueText.Contains('<') || valueText.Contains('>'))
+        double calculatedValue = RequireAdvancedBaseValue(
+            result,
+            fieldName,
+            text
+        );
+
+        if (minimum.HasValue &&
+            maximum.HasValue &&
+            minimum.Value > maximum.Value)
         {
             throw new Exception(
-                $"{fieldName} 범위 형식이 올바르지 않습니다: '{text}'\n" +
-                "최솟값은 '70<' 또는 '>70' 형식으로 입력하세요."
+                $"{fieldName}의 최소값 {minimum.Value:0.###}이 " +
+                $"최대값 {maximum.Value:0.###}보다 큽니다."
             );
         }
 
-        exactValue = ReadRequiredPositiveValue(valueText, fieldName);
+        if (minimum.HasValue)
+        {
+            calculatedValue = Math.Max(
+                calculatedValue,
+                minimum.Value
+            );
+        }
+
+        if (maximum.HasValue)
+        {
+            calculatedValue = Math.Min(
+                calculatedValue,
+                maximum.Value
+            );
+        }
+
+        return calculatedValue;
+    }
+
+    private static double RequireAdvancedBaseValue(
+        double? globalTargetValue,
+        string fieldName,
+        string expression
+    )
+    {
+        if (!globalTargetValue.HasValue)
+        {
+            throw new Exception(
+                $"{fieldName}에 '{expression}'을 사용하려면 " +
+                "위쪽 목표값을 먼저 입력하세요."
+            );
+        }
+
+        return globalTargetValue.Value;
+    }
+
+    private static Exception CreateAdvancedValueFormatException(
+        string fieldName,
+        string text
+    )
+    {
+        return new Exception(
+            $"{fieldName} 입력 형식이 올바르지 않습니다: '{text}'\n" +
+            "사용 가능: 70, 70<, >70, <70, 70>, +10, -10, *2, /2\n" +
+            "여러 조건은 '70< +10' 또는 '70<,+10'처럼 입력하세요."
+        );
     }
 
     private void AddOrUpdateConvertedFile(
@@ -3664,7 +3813,6 @@ internal sealed class DwgLayoutResizeTarget
     public double? TargetWidth { get; init; }
     public double? TargetHeight { get; init; }
     public double? TargetThickness { get; init; }
-    public double? MinimumThickness { get; init; }
 }
 
 internal sealed class LayoutSizeInputRow
@@ -3672,6 +3820,7 @@ internal sealed class LayoutSizeInputRow
     public string LayoutName { get; init; } = string.Empty;
     public int Sequence { get; init; }
     public string DisplayName { get; init; } = string.Empty;
+    public bool HasThickness { get; init; }
     public required TextBox WidthTextBox { get; init; }
     public required TextBox HeightTextBox { get; init; }
     public required TextBox ThicknessTextBox { get; init; }
