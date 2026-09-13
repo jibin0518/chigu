@@ -63,11 +63,15 @@ internal static class Program_V2
             FilePath = dwgPath,
             Width = context.CurrentValues.Width,
             Height = context.CurrentValues.Height,
-            Thickness = context.CurrentValues.Thickness,
-            LayoutSizes = ReadRecognizedPanelSizes(
-                context.PanelGroups,
-                context.NestedVertex16Bindings
-            )
+            Thickness = context.CurrentValues.Thickness
+
+            // 고급 설정 임시 비활성화.
+            // 다시 사용할 때 Thickness 줄 끝에 쉼표를 붙이고
+            // 아래 LayoutSizes 할당의 주석을 해제한다.
+            // LayoutSizes = ReadRecognizedPanelSizes(
+            //     context.PanelGroups,
+            //     context.NestedVertex16Bindings
+            // )
         };
     }
 
@@ -275,27 +279,41 @@ internal static class Program_V2
             TargetThickness = request.TargetThickness
         };
 
-        if (request.LayoutTargets.Count > 0)
-        {
-            ApplyLayoutSpecificResizes(
-                drawingData,
-                panelGroups,
-                originalNestedVertex16Bindings,
-                currentValues,
-                resizeInput,
-                request.LayoutTargets
-            );
-        }
-        else
-        {
-            ApplyGlobalResize(
-                drawingData,
-                panelGroups,
-                originalNestedVertex16Bindings,
-                currentValues,
-                resizeInput
-            );
-        }
+        /*
+         * 고급 설정 임시 비활성화.
+         * 다시 사용할 때 이 블록의 주석을 해제하고,
+         * 바로 아래 ApplyGlobalResize 호출을 제거하면 된다.
+         *
+         * if (request.LayoutTargets.Count > 0)
+         * {
+         *     ApplyLayoutSpecificResizes(
+         *         drawingData,
+         *         panelGroups,
+         *         originalNestedVertex16Bindings,
+         *         currentValues,
+         *         resizeInput,
+         *         request.LayoutTargets
+         *     );
+         * }
+         * else
+         * {
+         *     ApplyGlobalResize(
+         *         drawingData,
+         *         panelGroups,
+         *         originalNestedVertex16Bindings,
+         *         currentValues,
+         *         resizeInput
+         *     );
+         * }
+         */
+
+        ApplyGlobalResize(
+            drawingData,
+            panelGroups,
+            originalNestedVertex16Bindings,
+            currentValues,
+            resizeInput
+        );
 
         string outputDirectory = request.OutputDirectory;
 

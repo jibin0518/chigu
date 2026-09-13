@@ -411,7 +411,7 @@ internal sealed class ResizeMainForm : Form
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 180F));
         RowStyle layoutSizeRowStyle = new(
             SizeType.Absolute,
-            52F
+            0F
         );
         layout.RowStyles.Add(layoutSizeRowStyle);
         layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 72F));
@@ -450,7 +450,10 @@ internal sealed class ResizeMainForm : Form
 
         layout.Controls.Add(saveCurrentStateButton, 0, 1);
         layout.Controls.Add(sizeInputPanel, 0, 2);
-        layout.Controls.Add(layoutSizePanel, 0, 3);
+        // 고급 설정 UI 임시 비활성화.
+        // 다시 사용할 때 행 높이를 52F로 복구하고 아래 줄의 주석을 해제한다.
+        // layout.Controls.Add(layoutSizePanel, 0, 3);
+        _ = layoutSizePanel;
         layout.Controls.Add(convertButton, 0, 4);
         layout.Controls.Add(convertLabel, 0, 5);
         panel.Controls.Add(layout);
@@ -2249,7 +2252,7 @@ internal sealed class ResizeMainForm : Form
         double targetWidth;
         double targetHeight;
         double? targetThickness;
-        List<DwgLayoutResizeTarget> layoutTargets;
+        List<DwgLayoutResizeTarget> layoutTargets = new();
 
         try
         {
@@ -2265,11 +2268,13 @@ internal sealed class ResizeMainForm : Form
                 ConversionThicknessTextBox.Text.Trim(),
                 "목표 두께"
             );
-            layoutTargets = ReadAdvancedLayoutTargets(
-                targetWidth,
-                targetHeight,
-                targetThickness
-            );
+            // 고급 설정 임시 비활성화.
+            // 다시 사용할 때 아래 호출의 주석을 해제한다.
+            // layoutTargets = ReadAdvancedLayoutTargets(
+            //     targetWidth,
+            //     targetHeight,
+            //     targetThickness
+            // );
         }
         catch (Exception ex)
         {
