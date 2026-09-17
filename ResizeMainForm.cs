@@ -29,8 +29,11 @@ internal sealed class ResizeMainForm : Form
     private readonly Dictionary<string, List<UiSavedAdvancedLayoutValue>>
         _advancedLayoutValuesByFilePath =
             new(StringComparer.OrdinalIgnoreCase);
+    private readonly ToolTip _inputSettingsToolTip = new();
     private string? _displayedLayoutFilePath;
     private bool _restoringAdvancedLayoutValues;
+    private double _normalPanelGap = 100.0;
+    private double _thicknessPanelGap = 30.0;
 
     private static string UiStateSettingsFile => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
@@ -40,6 +43,7 @@ internal sealed class ResizeMainForm : Form
 
     public TextBox InputPathTextBox { get; }
     public Button InputPathBrowseButton { get; }
+    public Button InputSettingsButton { get; }
     public TextBox InputFileSearchTextBox { get; }
     public Button RefreshInputFilesButton { get; }
     public TextBox OutputPathTextBox { get; }
@@ -128,7 +132,14 @@ internal sealed class ResizeMainForm : Form
         TableLayoutPanel leftLayout = CreateSectionLayout(86F);
         TableLayoutPanel rightLayout = CreateSectionLayout(86F);
 
-        Label inputTitle = CreateSectionTitle("입력 파일");
+        Panel inputTitlePanel = CreateInputSectionHeader(
+            out Button inputSettingsButton
+        );
+        InputSettingsButton = inputSettingsButton;
+        _inputSettingsToolTip.SetToolTip(
+            InputSettingsButton,
+            "입력 파일 설정"
+        );
         Label outputTitle = CreateSectionTitle("수정 파일");
 
         Panel inputPathPanel = CreatePathPanel(
@@ -289,7 +300,7 @@ internal sealed class ResizeMainForm : Form
             null
         );
 
-        leftLayout.Controls.Add(inputTitle, 0, 0);
+        leftLayout.Controls.Add(inputTitlePanel, 0, 0);
         leftLayout.Controls.Add(inputPathPanel, 0, 1);
         leftLayout.Controls.Add(currentSizePanel, 0, 2);
         leftLayout.Controls.Add(inputGridPanel, 0, 3);
@@ -309,6 +320,7 @@ internal sealed class ResizeMainForm : Form
         Controls.Add(root);
 
         InputPathBrowseButton.Click += InputPathBrowseButton_Click;
+        InputSettingsButton.Click += InputSettingsButton_Click;
         InputFileSearchTextBox.TextChanged +=
             InputFileSearchTextBox_TextChanged;
         RefreshInputFilesButton.Click += RefreshInputFilesButton_Click;
@@ -344,6 +356,100 @@ internal sealed class ResizeMainForm : Form
         UpdateOutputPathMode();
         SetConversionThicknessInputEnabled(false);
         LoadSavedUiState();
+    }
+
+    private void InputSettingsButton_Click(object? sender, EventArgs e)
+    {
+        CacheDisplayedAdvancedLayoutValues();
+
+        DataGridViewRow? selectedRow = GetSelectedRow(InputFilesGrid);
+        string? selectedFilePath = selectedRow?.Tag as string;
+        List<DwgLayoutSizeSnapshot> layoutSizes =
+            GetCachedLayoutSizes(selectedFilePath) ?? new();
+
+        if (!string.IsNullOrWhiteSpace(selectedFilePath) &&
+            AnalyzeDwgFile != null &&
+            File.Exists(selectedFilePath))
+        {
+            try
+            {
+                DwgFileSizeSnapshot snapshot =
+                    AnalyzeDwgFile(selectedFilePath);
+                CacheLayoutSizes(snapshot);
+
+                if (selectedRow != null)
+                {
+                    ApplySizeToGridRow(selectedRow, snapshot);
+                }
+
+                SetCurrentSizeBoxes(snapshot);
+                layoutSizes =
+                    GetCachedLayoutSizes(selectedFilePath) ?? new();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(
+                    this,
+                    "선택한 DWG의 개별 패널 크기를 읽지 못했습니다.\n\n" +
+                    ex.Message,
+                    "설정 분석 오류",
+                    MessageBoxButtons.OK,
+                    MessageBoxIcon.Warning
+                );
+            }
+        }
+
+        List<UiSavedAdvancedLayoutValue> savedAdvancedValues =
+            !string.IsNullOrWhiteSpace(selectedFilePath) &&
+            _advancedLayoutValuesByFilePath.TryGetValue(
+                selectedFilePath,
+                out List<UiSavedAdvancedLayoutValue>? fileValues
+            )
+                ? fileValues.Select(value => value.Copy()).ToList()
+                : new List<UiSavedAdvancedLayoutValue>();
+
+        using InputFileSettingsForm settingsForm = new(
+            _normalPanelGap,
+            _thicknessPanelGap,
+            selectedFilePath,
+            layoutSizes,
+            savedAdvancedValues
+        );
+
+        if (Icon != null)
+        {
+            settingsForm.Icon = Icon;
+        }
+
+        if (settingsForm.ShowDialog(this) != DialogResult.OK)
+        {
+            return;
+        }
+
+        _normalPanelGap = settingsForm.NormalPanelGap;
+        _thicknessPanelGap = settingsForm.ThicknessPanelGap;
+
+        if (!string.IsNullOrWhiteSpace(selectedFilePath))
+        {
+            if (settingsForm.UseFileAdvancedSettings)
+            {
+                _advancedLayoutValuesByFilePath[selectedFilePath] =
+                    settingsForm.AdvancedLayoutValues
+                        .Select(value => value.Copy())
+                        .ToList();
+            }
+            else
+            {
+                _advancedLayoutValuesByFilePath.Remove(selectedFilePath);
+            }
+
+            // 기존에 숨겨진 고급 설정 입력값이 방금 저장한 값을
+            // 다시 덮어쓰지 않도록 표시 대상을 먼저 해제한다.
+            _displayedLayoutFilePath = null;
+            SetLayoutSizeDisplay(selectedFilePath);
+        }
+
+        SaveCurrentUiState(showSuccessMessage: false);
     }
 
     /// <summary>
@@ -692,14 +798,15 @@ internal sealed class ResizeMainForm : Form
         EventArgs e
     )
     {
+        string initialDirectory =
+            ResolveFolderDialogInitialPath(InputPathTextBox.Text);
+
         using FolderBrowserDialog dialog = new()
         {
             Description = "DWG 파일이 들어 있는 폴더를 선택하세요",
             UseDescriptionForTitle = true,
             ShowNewFolderButton = false,
-            SelectedPath = Directory.Exists(InputPathTextBox.Text)
-                ? InputPathTextBox.Text
-                : string.Empty
+            SelectedPath = initialDirectory
         };
 
         if (dialog.ShowDialog(this) != DialogResult.OK)
@@ -1103,6 +1210,8 @@ internal sealed class ResizeMainForm : Form
                 TargetWidth = ConversionWidthTextBox.Text.Trim(),
                 TargetHeight = ConversionHeightTextBox.Text.Trim(),
                 TargetThickness = ConversionThicknessTextBox.Text.Trim(),
+                NormalPanelGap = _normalPanelGap,
+                ThicknessPanelGap = _thicknessPanelGap,
                 AdvancedLayoutValues =
                     _advancedLayoutValuesByFilePath
                         .SelectMany(pair => pair.Value)
@@ -1204,6 +1313,13 @@ internal sealed class ResizeMainForm : Form
             ConversionHeightTextBox.Text = state.TargetHeight ?? string.Empty;
             ConversionThicknessTextBox.Text =
                 state.TargetThickness ?? string.Empty;
+
+            _normalPanelGap = IsValidGap(state.NormalPanelGap)
+                ? state.NormalPanelGap!.Value
+                : 100.0;
+            _thicknessPanelGap = IsValidGap(state.ThicknessPanelGap)
+                ? state.ThicknessPanelGap!.Value
+                : 30.0;
 
             DataGridViewRow? selectedInputRow =
                 GetSelectedRow(InputFilesGrid);
@@ -1469,16 +1585,19 @@ internal sealed class ResizeMainForm : Form
 
     private void SelectAndAddDwgFolder()
     {
-        string listDirectory = InputPathTextBox.Text.Trim();
+        string listDirectory =
+            ResolveFolderDialogInitialPath(InputPathTextBox.Text);
 
         using FolderBrowserDialog dialog = new()
         {
             Description = "목록에 추가할 DWG 폴더를 선택하세요",
             UseDescriptionForTitle = true,
             ShowNewFolderButton = false,
-            SelectedPath = Directory.Exists(listDirectory)
-                ? listDirectory
-                : string.Empty
+            AutoUpgradeEnabled = true,
+
+            // SelectedPath는 해당 폴더를 선택하기 위해 부모 폴더를 연다.
+            // InitialDirectory는 지정한 폴더 내부에서 탐색을 시작한다.
+            InitialDirectory = listDirectory
         };
 
         if (dialog.ShowDialog(this) != DialogResult.OK)
@@ -1512,13 +1631,13 @@ internal sealed class ResizeMainForm : Form
             return;
         }
 
-        InputPathTextBox.Text = selectedFolder;
         AddDwgFiles(dwgFiles, selectedFolder);
     }
 
     private void SelectAndAddDwgFile()
     {
-        string listDirectory = InputPathTextBox.Text.Trim();
+        string listDirectory =
+            ResolveFolderDialogInitialPath(InputPathTextBox.Text);
 
         using OpenFileDialog dialog = new()
         {
@@ -1528,9 +1647,7 @@ internal sealed class ResizeMainForm : Form
             CheckFileExists = true,
             CheckPathExists = true,
             RestoreDirectory = true,
-            InitialDirectory = Directory.Exists(listDirectory)
-                ? listDirectory
-                : string.Empty
+            InitialDirectory = listDirectory
         };
 
         if (dialog.ShowDialog(this) != DialogResult.OK)
@@ -1538,15 +1655,91 @@ internal sealed class ResizeMainForm : Form
             return;
         }
 
-        string? selectedDirectory = Path.GetDirectoryName(dialog.FileName);
+        AddDwgFiles(new[] { dialog.FileName });
+    }
 
-        if (string.IsNullOrWhiteSpace(InputPathTextBox.Text) &&
-            !string.IsNullOrWhiteSpace(selectedDirectory))
+    /// <summary>
+    /// 사용자가 고정한 파일 목록 경로를 파일/폴더 선택창의 시작 위치로 사용한다.
+    /// C:a처럼 드라이브 뒤 구분자가 빠진 경로는 C:\a로 보정하고,
+    /// 전체 경로가 아직 없으면 가장 가까운 실제 상위 폴더에서 시작한다.
+    /// </summary>
+    private static string ResolveFolderDialogInitialPath(
+        string? configuredPath
+    )
+    {
+        string path = (configuredPath ?? string.Empty)
+            .Trim()
+            .Trim('"');
+
+        if (string.IsNullOrWhiteSpace(path))
         {
-            InputPathTextBox.Text = selectedDirectory;
+            return string.Empty;
         }
 
-        AddDwgFiles(new[] { dialog.FileName });
+        path = Environment.ExpandEnvironmentVariables(path)
+            .Replace(
+                Path.AltDirectorySeparatorChar,
+                Path.DirectorySeparatorChar
+            );
+
+        // "C:a"는 Windows에서 "C 드라이브의 현재 폴더 아래 a"라는
+        // 상대 경로이므로 사용자가 의도한 "C:\a"로 보정한다.
+        if (path.Length >= 2 &&
+            char.IsLetter(path[0]) &&
+            path[1] == ':' &&
+            (path.Length == 2 ||
+                path[2] != Path.DirectorySeparatorChar))
+        {
+            path = path.Insert(
+                2,
+                Path.DirectorySeparatorChar.ToString()
+            );
+        }
+
+        try
+        {
+            path = Path.GetFullPath(path);
+        }
+        catch
+        {
+            return string.Empty;
+        }
+
+        if (File.Exists(path))
+        {
+            path = Path.GetDirectoryName(path) ?? string.Empty;
+        }
+
+        string? candidate = path;
+
+        while (!string.IsNullOrWhiteSpace(candidate))
+        {
+            if (Directory.Exists(candidate))
+            {
+                return candidate;
+            }
+
+            string trimmed = candidate.TrimEnd(
+                Path.DirectorySeparatorChar,
+                Path.AltDirectorySeparatorChar
+            );
+
+            string? parent = Path.GetDirectoryName(trimmed);
+
+            if (string.IsNullOrWhiteSpace(parent) ||
+                string.Equals(
+                    parent,
+                    candidate,
+                    StringComparison.OrdinalIgnoreCase
+                ))
+            {
+                break;
+            }
+
+            candidate = parent;
+        }
+
+        return string.Empty;
     }
 
     private void AddDwgFiles(
@@ -1649,11 +1842,6 @@ internal sealed class ResizeMainForm : Form
 
                 if (!string.IsNullOrWhiteSpace(directory))
                 {
-                    if (string.IsNullOrWhiteSpace(InputPathTextBox.Text))
-                    {
-                        InputPathTextBox.Text = directory;
-                    }
-
                     if (!AutoOutputPathCheckBox.Checked &&
                         string.IsNullOrWhiteSpace(OutputPathTextBox.Text))
                     {
@@ -2252,7 +2440,6 @@ internal sealed class ResizeMainForm : Form
         double targetWidth;
         double targetHeight;
         double? targetThickness;
-        List<DwgLayoutResizeTarget> layoutTargets = new();
 
         try
         {
@@ -2268,13 +2455,6 @@ internal sealed class ResizeMainForm : Form
                 ConversionThicknessTextBox.Text.Trim(),
                 "목표 두께"
             );
-            // 고급 설정 임시 비활성화.
-            // 다시 사용할 때 아래 호출의 주석을 해제한다.
-            // layoutTargets = ReadAdvancedLayoutTargets(
-            //     targetWidth,
-            //     targetHeight,
-            //     targetThickness
-            // );
         }
         catch (Exception ex)
         {
@@ -2336,7 +2516,15 @@ internal sealed class ResizeMainForm : Form
                             TargetWidth = targetWidth,
                             TargetHeight = targetHeight,
                             TargetThickness = targetThickness,
-                            LayoutTargets = layoutTargets
+                            NormalPanelGap = _normalPanelGap,
+                            ThicknessPanelGap = _thicknessPanelGap,
+                            LayoutTargets =
+                                ReadAdvancedLayoutTargetsForFile(
+                                    inputPath,
+                                    targetWidth,
+                                    targetHeight,
+                                    targetThickness
+                                )
                         }
                     );
 
@@ -2815,6 +3003,68 @@ internal sealed class ResizeMainForm : Form
         return targets;
     }
 
+    private List<DwgLayoutResizeTarget>
+        ReadAdvancedLayoutTargetsForFile(
+            string filePath,
+            double globalTargetWidth,
+            double globalTargetHeight,
+            double? globalTargetThickness
+        )
+    {
+        if (!_advancedLayoutValuesByFilePath.TryGetValue(
+                filePath,
+                out List<UiSavedAdvancedLayoutValue>? savedValues
+            ))
+        {
+            return new List<DwgLayoutResizeTarget>();
+        }
+
+        List<DwgLayoutResizeTarget> targets = new();
+
+        foreach (UiSavedAdvancedLayoutValue value in savedValues)
+        {
+            string widthText = value.Width?.Trim() ?? string.Empty;
+            string heightText = value.Height?.Trim() ?? string.Empty;
+            string thicknessText =
+                value.Thickness?.Trim() ?? string.Empty;
+
+            if (string.IsNullOrWhiteSpace(widthText) &&
+                string.IsNullOrWhiteSpace(heightText) &&
+                string.IsNullOrWhiteSpace(thicknessText))
+            {
+                continue;
+            }
+
+            string displayName = $"{value.LayoutName} {value.Sequence}";
+            double? width = ReadAdvancedValue(
+                widthText,
+                $"{displayName} 가로",
+                globalTargetWidth
+            );
+            double? height = ReadAdvancedValue(
+                heightText,
+                $"{displayName} 세로",
+                globalTargetHeight
+            );
+            double? thickness = ReadAdvancedValue(
+                thicknessText,
+                $"{displayName} 두께",
+                globalTargetThickness
+            );
+
+            targets.Add(new DwgLayoutResizeTarget
+            {
+                LayoutName = value.LayoutName,
+                Sequence = value.Sequence,
+                TargetWidth = width,
+                TargetHeight = height,
+                TargetThickness = thickness
+            });
+        }
+
+        return targets;
+    }
+
     private static double? ReadAdvancedValue(
         string text,
         string fieldName,
@@ -3212,6 +3462,14 @@ internal sealed class ResizeMainForm : Form
                );
     }
 
+    private static bool IsValidGap(double? value)
+    {
+        return value.HasValue &&
+               !double.IsNaN(value.Value) &&
+               !double.IsInfinity(value.Value) &&
+               value.Value >= 0.0;
+    }
+
     private static Panel CreateCard()
     {
         return new Panel
@@ -3253,6 +3511,54 @@ internal sealed class ResizeMainForm : Form
             Font = new Font("Segoe UI", 16F, FontStyle.Bold, GraphicsUnit.Point),
             ForeColor = Color.FromArgb(31, 41, 55)
         };
+    }
+
+    private static Panel CreateInputSectionHeader(
+        out Button settingsButton
+    )
+    {
+        Panel panel = new()
+        {
+            Dock = DockStyle.Fill,
+            BackColor = CardBackground,
+            Margin = new Padding(0)
+        };
+
+        Label title = CreateSectionTitle("입력 파일");
+        title.Padding = new Padding(0, 0, 48, 0);
+
+        settingsButton = new Button
+        {
+            // Windows 설정 앱과 같은 전용 톱니바퀴 글리프를 사용한다.
+            // 일반 유니코드 ⚙보다 작은 크기에서도 선명하게 표시된다.
+            Text = "\uE713",
+            AccessibleName = "입력 파일 설정",
+            Dock = DockStyle.Right,
+            Width = 44,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = CardBackground,
+            ForeColor = Color.FromArgb(31, 73, 135),
+            Font = new Font(
+                "Segoe MDL2 Assets",
+                18F,
+                FontStyle.Regular,
+                GraphicsUnit.Point
+            ),
+            TextAlign = ContentAlignment.MiddleCenter,
+            Padding = new Padding(0),
+            Cursor = Cursors.Hand,
+            Margin = new Padding(0),
+            TabStop = true
+        };
+        settingsButton.FlatAppearance.BorderSize = 0;
+        settingsButton.FlatAppearance.MouseOverBackColor =
+            Color.FromArgb(238, 242, 247);
+        settingsButton.FlatAppearance.MouseDownBackColor =
+            Color.FromArgb(222, 229, 239);
+
+        panel.Controls.Add(title);
+        panel.Controls.Add(settingsButton);
+        return panel;
     }
 
     private static Panel CreateOutputPathPanel(
@@ -3782,6 +4088,739 @@ internal sealed class ResizeMainForm : Form
     }
 }
 
+internal sealed class InputFileSettingsForm : Form
+{
+    private readonly TextBox _normalPanelGapTextBox;
+    private readonly TextBox _thicknessPanelGapTextBox;
+    private readonly CheckBox _useFileAdvancedSettingsCheckBox;
+    private readonly List<LayoutSizeInputRow> _fileLayoutRows = new();
+    private readonly string? _selectedFilePath;
+
+    public double NormalPanelGap { get; private set; }
+    public double ThicknessPanelGap { get; private set; }
+    public bool UseFileAdvancedSettings { get; private set; }
+    public List<UiSavedAdvancedLayoutValue> AdvancedLayoutValues
+        { get; private set; } = new();
+
+    public InputFileSettingsForm(
+        double normalPanelGap,
+        double thicknessPanelGap,
+        string? selectedFilePath,
+        IReadOnlyList<DwgLayoutSizeSnapshot> layoutSizes,
+        IReadOnlyList<UiSavedAdvancedLayoutValue> savedAdvancedValues
+    )
+    {
+        NormalPanelGap = normalPanelGap;
+        ThicknessPanelGap = thicknessPanelGap;
+        _selectedFilePath = selectedFilePath;
+        Text = "입력 파일 설정";
+        StartPosition = FormStartPosition.CenterParent;
+        FormBorderStyle = FormBorderStyle.Sizable;
+        MaximizeBox = true;
+        MinimizeBox = false;
+        ShowInTaskbar = false;
+        ClientSize = new Size(720, 650);
+        MinimumSize = new Size(430, 320);
+        BackColor = Color.White;
+        Font = new Font(
+            "Segoe UI",
+            10F,
+            FontStyle.Regular,
+            GraphicsUnit.Point
+        );
+
+        TableLayoutPanel layout = new()
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 3,
+            Padding = new Padding(24),
+            BackColor = Color.White
+        };
+        layout.ColumnStyles.Add(
+            new ColumnStyle(SizeType.Percent, 100F)
+        );
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 42F));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 48F));
+
+        Label titleLabel = new()
+        {
+            Text = "입력 파일 설정",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Font = new Font(
+                "Segoe UI",
+                15F,
+                FontStyle.Bold,
+                GraphicsUnit.Point
+            ),
+            ForeColor = Color.FromArgb(31, 41, 55)
+        };
+
+        GroupBox generalSettingsGroup = new()
+        {
+            Text = "범용 설정",
+            Dock = DockStyle.Fill,
+            BackColor = Color.White,
+            ForeColor = Color.FromArgb(31, 41, 55),
+            Padding = new Padding(14, 14, 14, 12),
+            Margin = new Padding(0, 8, 0, 12)
+        };
+
+        TableLayoutPanel settingsLayout = new()
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 2,
+            RowCount = 3,
+            BackColor = Color.White,
+            Padding = new Padding(8, 8, 8, 4),
+            MinimumSize = new Size(390, 160)
+        };
+        settingsLayout.ColumnStyles.Add(
+            new ColumnStyle(SizeType.Absolute, 180F)
+        );
+        settingsLayout.ColumnStyles.Add(
+            new ColumnStyle(SizeType.Percent, 100F)
+        );
+        settingsLayout.RowStyles.Add(
+            new RowStyle(SizeType.Absolute, 48F)
+        );
+        settingsLayout.RowStyles.Add(
+            new RowStyle(SizeType.Absolute, 48F)
+        );
+        settingsLayout.RowStyles.Add(
+            new RowStyle(SizeType.Percent, 100F)
+        );
+
+        _normalPanelGapTextBox = CreateGapTextBox(normalPanelGap);
+        _thicknessPanelGapTextBox = CreateGapTextBox(thicknessPanelGap);
+
+        settingsLayout.Controls.Add(
+            CreateSettingsLabel("나머지 패널 간격"),
+            0,
+            0
+        );
+        settingsLayout.Controls.Add(_normalPanelGapTextBox, 1, 0);
+        settingsLayout.Controls.Add(
+            CreateSettingsLabel("두께판 간격"),
+            0,
+            1
+        );
+        settingsLayout.Controls.Add(_thicknessPanelGapTextBox, 1, 1);
+
+        Label helpLabel = new()
+        {
+            Text = "패널 재배치 시 도면 단위로 적용됩니다.",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.TopLeft,
+            ForeColor = Color.FromArgb(92, 101, 116),
+            Margin = new Padding(3, 8, 3, 0)
+        };
+        settingsLayout.Controls.Add(helpLabel, 0, 2);
+        settingsLayout.SetColumnSpan(helpLabel, 2);
+
+        generalSettingsGroup.Controls.Add(settingsLayout);
+
+        GroupBox fileAdvancedSettingsGroup =
+            CreateFileAdvancedSettingsGroup(
+                layoutSizes,
+                savedAdvancedValues,
+                out CheckBox useFileAdvancedSettingsCheckBox
+            );
+        _useFileAdvancedSettingsCheckBox =
+            useFileAdvancedSettingsCheckBox;
+        UpdateFileAdvancedInputsEnabled();
+
+        int advancedSettingsHeight = Math.Max(
+            190,
+            125 + (layoutSizes.Count * 38)
+        );
+
+        TableLayoutPanel settingsSectionsLayout = new()
+        {
+            Dock = DockStyle.Top,
+            ColumnCount = 1,
+            RowCount = 2,
+            Height = 190 + advancedSettingsHeight,
+            MinimumSize = new Size(620, 190 + advancedSettingsHeight),
+            BackColor = Color.White,
+            Margin = new Padding(0)
+        };
+        settingsSectionsLayout.ColumnStyles.Add(
+            new ColumnStyle(SizeType.Percent, 100F)
+        );
+        settingsSectionsLayout.RowStyles.Add(
+            new RowStyle(SizeType.Absolute, 190F)
+        );
+        settingsSectionsLayout.RowStyles.Add(
+            new RowStyle(SizeType.Absolute, advancedSettingsHeight)
+        );
+        settingsSectionsLayout.Controls.Add(generalSettingsGroup, 0, 0);
+        settingsSectionsLayout.Controls.Add(fileAdvancedSettingsGroup, 0, 1);
+
+        Panel settingsScrollHost = new()
+        {
+            Dock = DockStyle.Fill,
+            AutoScroll = true,
+            AutoScrollMinSize = new Size(
+                620,
+                190 + advancedSettingsHeight
+            ),
+            BackColor = Color.White,
+            Margin = new Padding(0),
+            Padding = new Padding(0)
+        };
+        settingsScrollHost.Controls.Add(settingsSectionsLayout);
+
+        Button saveButton = new()
+        {
+            Text = "저장",
+            Dock = DockStyle.Right,
+            Width = 110,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(42, 103, 209),
+            ForeColor = Color.White,
+            Font = new Font(
+                "Segoe UI",
+                10F,
+                FontStyle.Bold,
+                GraphicsUnit.Point
+            ),
+            Cursor = Cursors.Hand,
+            Margin = new Padding(8, 6, 0, 0)
+        };
+        saveButton.FlatAppearance.BorderSize = 0;
+        saveButton.Click += SaveButton_Click;
+
+        Button cancelButton = new()
+        {
+            Text = "취소",
+            Dock = DockStyle.Right,
+            Width = 110,
+            DialogResult = DialogResult.Cancel,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(238, 242, 247),
+            ForeColor = Color.FromArgb(31, 73, 135),
+            Font = new Font(
+                "Segoe UI",
+                10F,
+                FontStyle.Bold,
+                GraphicsUnit.Point
+            ),
+            Cursor = Cursors.Hand,
+            Margin = new Padding(0, 6, 0, 0)
+        };
+        cancelButton.FlatAppearance.BorderColor =
+            Color.FromArgb(205, 211, 220);
+
+        Button restoreDefaultsButton = new()
+        {
+            Text = "기본값 복원",
+            Dock = DockStyle.Left,
+            Width = 120,
+            FlatStyle = FlatStyle.Flat,
+            BackColor = Color.FromArgb(238, 242, 247),
+            ForeColor = Color.FromArgb(31, 73, 135),
+            Font = new Font(
+                "Segoe UI",
+                10F,
+                FontStyle.Bold,
+                GraphicsUnit.Point
+            ),
+            Cursor = Cursors.Hand,
+            Margin = new Padding(0, 6, 0, 0)
+        };
+        restoreDefaultsButton.FlatAppearance.BorderColor =
+            Color.FromArgb(205, 211, 220);
+        restoreDefaultsButton.Click += RestoreDefaultsButton_Click;
+
+        Panel buttonHost = new()
+        {
+            Dock = DockStyle.Fill,
+            Margin = new Padding(0)
+        };
+        buttonHost.Controls.Add(restoreDefaultsButton);
+        buttonHost.Controls.Add(saveButton);
+        buttonHost.Controls.Add(cancelButton);
+
+        layout.Controls.Add(titleLabel, 0, 0);
+        layout.Controls.Add(settingsScrollHost, 0, 1);
+        layout.Controls.Add(buttonHost, 0, 2);
+        Controls.Add(layout);
+
+        AcceptButton = saveButton;
+        CancelButton = cancelButton;
+    }
+
+    private void RestoreDefaultsButton_Click(object? sender, EventArgs e)
+    {
+        DialogResult result = MessageBox.Show(
+            this,
+            "범용 간격을 기본값으로 되돌리고\n" +
+            "현재 선택 파일의 개별 설정을 모두 지우시겠습니까?\n\n" +
+            "나머지 패널 간격: 100\n" +
+            "두께판 간격: 30",
+            "기본값 복원",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Question,
+            MessageBoxDefaultButton.Button2
+        );
+
+        if (result != DialogResult.Yes)
+        {
+            return;
+        }
+
+        _normalPanelGapTextBox.Text =
+            100.0.ToString("0.###", CultureInfo.CurrentCulture);
+        _thicknessPanelGapTextBox.Text =
+            30.0.ToString("0.###", CultureInfo.CurrentCulture);
+
+        _useFileAdvancedSettingsCheckBox.Checked = false;
+
+        foreach (LayoutSizeInputRow row in _fileLayoutRows)
+        {
+            row.WidthTextBox.Clear();
+            row.HeightTextBox.Clear();
+            row.ThicknessTextBox.Clear();
+        }
+
+        UpdateFileAdvancedInputsEnabled();
+    }
+
+    private GroupBox CreateFileAdvancedSettingsGroup(
+        IReadOnlyList<DwgLayoutSizeSnapshot> layoutSizes,
+        IReadOnlyList<UiSavedAdvancedLayoutValue> savedAdvancedValues,
+        out CheckBox useFileAdvancedSettingsCheckBox
+    )
+    {
+        GroupBox group = new()
+        {
+            Text = "선택 파일 개별 크기 설정",
+            Dock = DockStyle.Fill,
+            BackColor = Color.White,
+            ForeColor = Color.FromArgb(31, 41, 55),
+            Padding = new Padding(14, 14, 14, 12),
+            Margin = new Padding(0, 0, 0, 12)
+        };
+
+        TableLayoutPanel layout = new()
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 1,
+            RowCount = 4,
+            BackColor = Color.White,
+            Padding = new Padding(8, 6, 8, 4)
+        };
+        layout.ColumnStyles.Add(
+            new ColumnStyle(SizeType.Percent, 100F)
+        );
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 30F));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 28F));
+        layout.RowStyles.Add(new RowStyle(SizeType.Absolute, 38F));
+        layout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
+
+        bool hasSavedValues = savedAdvancedValues.Any(value =>
+            !string.IsNullOrWhiteSpace(value.Width) ||
+            !string.IsNullOrWhiteSpace(value.Height) ||
+            !string.IsNullOrWhiteSpace(value.Thickness));
+
+        useFileAdvancedSettingsCheckBox = new CheckBox
+        {
+            Text = "이 파일에 개별 설정 적용",
+            Checked = hasSavedValues,
+            Enabled = !string.IsNullOrWhiteSpace(_selectedFilePath) &&
+                      layoutSizes.Count > 0,
+            Dock = DockStyle.Fill,
+            AutoSize = false,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Cursor = Cursors.Hand,
+            Margin = new Padding(0)
+        };
+        useFileAdvancedSettingsCheckBox.CheckedChanged +=
+            UseFileAdvancedSettingsCheckBox_CheckedChanged;
+
+        Label fileNameLabel = new()
+        {
+            Text = string.IsNullOrWhiteSpace(_selectedFilePath)
+                ? "선택된 DWG 파일 없음"
+                : $"파일: {Path.GetFileName(_selectedFilePath)}",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = Color.FromArgb(55, 65, 81),
+            AutoEllipsis = true,
+            Margin = new Padding(0)
+        };
+
+        Label helpLabel = new()
+        {
+            Text = "빈칸은 전체 목표값을 사용합니다. " +
+                   "현재값은 입력칸의 밑글자로 표시됩니다. " +
+                   "예: 70< +10, <70, *2, /2",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            ForeColor = Color.FromArgb(92, 101, 116),
+            AutoEllipsis = true,
+            Margin = new Padding(0)
+        };
+
+        TableLayoutPanel rowsLayout = new()
+        {
+            Dock = DockStyle.Fill,
+            ColumnCount = 6,
+            RowCount = 0,
+            BackColor = Color.White,
+            Margin = new Padding(0),
+            Padding = new Padding(0),
+            GrowStyle = TableLayoutPanelGrowStyle.AddRows
+        };
+        rowsLayout.ColumnStyles.Add(
+            new ColumnStyle(SizeType.Absolute, 105F)
+        );
+        rowsLayout.ColumnStyles.Add(
+            new ColumnStyle(SizeType.Percent, 33.333F)
+        );
+        rowsLayout.ColumnStyles.Add(
+            new ColumnStyle(SizeType.Absolute, 20F)
+        );
+        rowsLayout.ColumnStyles.Add(
+            new ColumnStyle(SizeType.Percent, 33.333F)
+        );
+        rowsLayout.ColumnStyles.Add(
+            new ColumnStyle(SizeType.Absolute, 20F)
+        );
+        rowsLayout.ColumnStyles.Add(
+            new ColumnStyle(SizeType.Percent, 33.333F)
+        );
+
+        if (layoutSizes.Count == 0)
+        {
+            Label messageLabel = new()
+            {
+                Text = string.IsNullOrWhiteSpace(_selectedFilePath)
+                    ? "왼쪽 파일 목록에서 DWG 파일을 선택하세요."
+                    : "선택한 파일에서 인식된 치구 패널이 없습니다.",
+                Dock = DockStyle.Fill,
+                TextAlign = ContentAlignment.MiddleCenter,
+                ForeColor = Color.FromArgb(92, 101, 116),
+                Margin = new Padding(0)
+            };
+            rowsLayout.RowCount = 1;
+            rowsLayout.RowStyles.Add(
+                new RowStyle(SizeType.Absolute, 45F)
+            );
+            rowsLayout.Controls.Add(messageLabel, 0, 0);
+            rowsLayout.SetColumnSpan(messageLabel, 6);
+        }
+        else
+        {
+            Dictionary<string, int> nameCounts = layoutSizes
+                .GroupBy(
+                    size => size.LayoutName,
+                    StringComparer.OrdinalIgnoreCase
+                )
+                .ToDictionary(
+                    groupItem => groupItem.Key,
+                    groupItem => groupItem.Count(),
+                    StringComparer.OrdinalIgnoreCase
+                );
+
+            foreach (DwgLayoutSizeSnapshot size in layoutSizes)
+            {
+                string displayName = nameCounts[size.LayoutName] > 1
+                    ? $"{size.LayoutName} {size.Sequence}"
+                    : size.LayoutName;
+
+                UiSavedAdvancedLayoutValue? saved =
+                    savedAdvancedValues.FirstOrDefault(value =>
+                        value.Sequence == size.Sequence &&
+                        string.Equals(
+                            value.LayoutName,
+                            size.LayoutName,
+                            StringComparison.OrdinalIgnoreCase
+                        ));
+
+                AddFileLayoutRow(
+                    rowsLayout,
+                    size,
+                    displayName,
+                    saved
+                );
+            }
+        }
+
+        layout.Controls.Add(useFileAdvancedSettingsCheckBox, 0, 0);
+        layout.Controls.Add(fileNameLabel, 0, 1);
+        layout.Controls.Add(helpLabel, 0, 2);
+        layout.Controls.Add(rowsLayout, 0, 3);
+        group.Controls.Add(layout);
+
+        return group;
+    }
+
+    private void AddFileLayoutRow(
+        TableLayoutPanel rowsLayout,
+        DwgLayoutSizeSnapshot size,
+        string displayName,
+        UiSavedAdvancedLayoutValue? saved
+    )
+    {
+        int rowIndex = rowsLayout.RowCount++;
+        rowsLayout.RowStyles.Add(
+            new RowStyle(SizeType.Absolute, 38F)
+        );
+
+        Label nameLabel = new()
+        {
+            Text = displayName,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            AutoEllipsis = true,
+            Margin = new Padding(0)
+        };
+
+        TextBox widthTextBox = CreateAdvancedSizeTextBox(
+            size.Width,
+            saved?.Width,
+            true
+        );
+        TextBox heightTextBox = CreateAdvancedSizeTextBox(
+            size.Height,
+            saved?.Height,
+            true
+        );
+        TextBox thicknessTextBox = CreateAdvancedSizeTextBox(
+            size.Thickness,
+            saved?.Thickness,
+            size.Thickness.HasValue
+        );
+
+        _fileLayoutRows.Add(new LayoutSizeInputRow
+        {
+            LayoutName = size.LayoutName,
+            Sequence = size.Sequence,
+            DisplayName = displayName,
+            HasThickness = size.Thickness.HasValue,
+            WidthTextBox = widthTextBox,
+            HeightTextBox = heightTextBox,
+            ThicknessTextBox = thicknessTextBox
+        });
+
+        rowsLayout.Controls.Add(nameLabel, 0, rowIndex);
+        rowsLayout.Controls.Add(widthTextBox, 1, rowIndex);
+        rowsLayout.Controls.Add(CreateMultiplyLabel(), 2, rowIndex);
+        rowsLayout.Controls.Add(heightTextBox, 3, rowIndex);
+        rowsLayout.Controls.Add(CreateMultiplyLabel(), 4, rowIndex);
+        rowsLayout.Controls.Add(thicknessTextBox, 5, rowIndex);
+    }
+
+    private TextBox CreateAdvancedSizeTextBox(
+        double? currentValue,
+        string? savedValue,
+        bool valueAvailable
+    )
+    {
+        TextBox textBox = new()
+        {
+            Text = valueAvailable ? savedValue ?? string.Empty : string.Empty,
+            PlaceholderText = currentValue.HasValue
+                ? currentValue.Value.ToString(
+                    "0.###",
+                    CultureInfo.CurrentCulture
+                )
+                : string.Empty,
+            Dock = DockStyle.Fill,
+            TextAlign = HorizontalAlignment.Center,
+            BorderStyle = BorderStyle.FixedSingle,
+            Enabled = false,
+            TabStop = false,
+            BackColor = Color.FromArgb(238, 241, 245),
+            Margin = new Padding(2, 6, 2, 5)
+        };
+
+        textBox.KeyDown += SettingsTextBox_KeyDown;
+        return textBox;
+    }
+
+    private static Label CreateMultiplyLabel()
+    {
+        return new Label
+        {
+            Text = "×",
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleCenter,
+            ForeColor = Color.FromArgb(92, 101, 116),
+            Margin = new Padding(0)
+        };
+    }
+
+    private void UseFileAdvancedSettingsCheckBox_CheckedChanged(
+        object? sender,
+        EventArgs e
+    )
+    {
+        UpdateFileAdvancedInputsEnabled();
+    }
+
+    private void UpdateFileAdvancedInputsEnabled()
+    {
+        bool enabled =
+            _useFileAdvancedSettingsCheckBox?.Checked == true;
+
+        foreach (LayoutSizeInputRow row in _fileLayoutRows)
+        {
+            SetFileAdvancedInputEnabled(row.WidthTextBox, enabled);
+            SetFileAdvancedInputEnabled(row.HeightTextBox, enabled);
+            SetFileAdvancedInputEnabled(
+                row.ThicknessTextBox,
+                enabled && row.HasThickness
+            );
+        }
+    }
+
+    private static void SetFileAdvancedInputEnabled(
+        TextBox textBox,
+        bool enabled
+    )
+    {
+        textBox.Enabled = enabled;
+        textBox.TabStop = enabled;
+        textBox.BackColor = enabled
+            ? Color.White
+            : Color.FromArgb(238, 241, 245);
+    }
+
+    private void SaveButton_Click(object? sender, EventArgs e)
+    {
+        if (!TryReadGap(
+                _normalPanelGapTextBox.Text,
+                "나머지 패널 간격",
+                out double normalPanelGap
+            ) ||
+            !TryReadGap(
+                _thicknessPanelGapTextBox.Text,
+                "두께판 간격",
+                out double thicknessPanelGap
+            ))
+        {
+            return;
+        }
+
+        NormalPanelGap = normalPanelGap;
+        ThicknessPanelGap = thicknessPanelGap;
+        UseFileAdvancedSettings =
+            _useFileAdvancedSettingsCheckBox.Checked &&
+            !string.IsNullOrWhiteSpace(_selectedFilePath) &&
+            _fileLayoutRows.Count > 0;
+
+        AdvancedLayoutValues = UseFileAdvancedSettings
+            ? _fileLayoutRows.Select(row =>
+                new UiSavedAdvancedLayoutValue
+                {
+                    FilePath = _selectedFilePath!,
+                    LayoutName = row.LayoutName,
+                    Sequence = row.Sequence,
+                    Width = row.WidthTextBox.Text.Trim(),
+                    Height = row.HeightTextBox.Text.Trim(),
+                    Thickness = row.HasThickness
+                        ? row.ThicknessTextBox.Text.Trim()
+                        : string.Empty
+                }
+            ).ToList()
+            : new List<UiSavedAdvancedLayoutValue>();
+        DialogResult = DialogResult.OK;
+        Close();
+    }
+
+    private bool TryReadGap(
+        string text,
+        string fieldName,
+        out double value
+    )
+    {
+        bool parsed =
+            double.TryParse(
+                text,
+                NumberStyles.Float,
+                CultureInfo.CurrentCulture,
+                out value
+            ) ||
+            double.TryParse(
+                text,
+                NumberStyles.Float,
+                CultureInfo.InvariantCulture,
+                out value
+            );
+
+        if (parsed &&
+            !double.IsNaN(value) &&
+            !double.IsInfinity(value) &&
+            value >= 0.0)
+        {
+            return true;
+        }
+
+        MessageBox.Show(
+            this,
+            $"{fieldName}은 0 이상의 숫자로 입력하세요.",
+            "설정값 확인",
+            MessageBoxButtons.OK,
+            MessageBoxIcon.Warning
+        );
+        return false;
+    }
+
+    private TextBox CreateGapTextBox(double value)
+    {
+        TextBox textBox = new()
+        {
+            Text = value.ToString("0.###", CultureInfo.CurrentCulture),
+            Dock = DockStyle.Fill,
+            TextAlign = HorizontalAlignment.Center,
+            BorderStyle = BorderStyle.FixedSingle,
+            Margin = new Padding(4, 9, 4, 9)
+        };
+
+        textBox.KeyDown += SettingsTextBox_KeyDown;
+        return textBox;
+    }
+
+    private void SettingsTextBox_KeyDown(object? sender, KeyEventArgs e)
+    {
+        if (e.KeyCode != Keys.Enter || e.Modifiers != Keys.None)
+        {
+            return;
+        }
+
+        e.Handled = true;
+        e.SuppressKeyPress = true;
+
+        if (sender is Control currentControl)
+        {
+            SelectNextControl(
+                currentControl,
+                forward: true,
+                tabStopOnly: true,
+                nested: true,
+                wrap: true
+            );
+        }
+    }
+
+    private static Label CreateSettingsLabel(string text)
+    {
+        return new Label
+        {
+            Text = text,
+            Dock = DockStyle.Fill,
+            TextAlign = ContentAlignment.MiddleLeft,
+            Margin = new Padding(3, 0, 3, 0)
+        };
+    }
+
+}
+
 internal sealed class DwgFileSizeSnapshot
 {
     public required string FilePath { get; init; }
@@ -3807,6 +4846,8 @@ internal sealed class DwgConversionRequest
     public double TargetWidth { get; init; }
     public double TargetHeight { get; init; }
     public double? TargetThickness { get; init; }
+    public double NormalPanelGap { get; init; } = 100.0;
+    public double ThicknessPanelGap { get; init; } = 30.0;
     public IReadOnlyList<DwgLayoutResizeTarget> LayoutTargets { get; init; } =
         Array.Empty<DwgLayoutResizeTarget>();
 }
@@ -3840,6 +4881,8 @@ internal sealed class UiSavedState
     public string? TargetWidth { get; init; }
     public string? TargetHeight { get; init; }
     public string? TargetThickness { get; init; }
+    public double? NormalPanelGap { get; init; }
+    public double? ThicknessPanelGap { get; init; }
     public List<UiSavedAdvancedLayoutValue>? AdvancedLayoutValues
         { get; init; }
     public List<UiSavedFileRow>? InputFiles { get; init; }
