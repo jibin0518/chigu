@@ -4465,9 +4465,20 @@ internal sealed class InputFileSettingsForm : Form
             Margin = new Padding(0)
         };
 
-        TableLayoutPanel rowsLayout = new()
+        Panel rowsScrollPanel = new()
         {
             Dock = DockStyle.Fill,
+            AutoScroll = true,
+            BackColor = Color.White,
+            Margin = new Padding(0),
+            Padding = new Padding(0)
+        };
+
+        TableLayoutPanel rowsLayout = new()
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
             ColumnCount = 6,
             RowCount = 0,
             BackColor = Color.White,
@@ -4553,7 +4564,8 @@ internal sealed class InputFileSettingsForm : Form
         layout.Controls.Add(useFileAdvancedSettingsCheckBox, 0, 0);
         layout.Controls.Add(fileNameLabel, 0, 1);
         layout.Controls.Add(helpLabel, 0, 2);
-        layout.Controls.Add(rowsLayout, 0, 3);
+        rowsScrollPanel.Controls.Add(rowsLayout);
+        layout.Controls.Add(rowsScrollPanel, 0, 3);
         group.Controls.Add(layout);
 
         return group;

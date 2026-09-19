@@ -4,6 +4,7 @@ using System.IO;
 using System.Linq;
 using System.Globalization;
 using System.Reflection;
+using System.Text;
 using System.Text.RegularExpressions;
 using System.Windows.Forms;
 using ACadSharp;
@@ -322,7 +323,7 @@ internal static class Program_V2
             (resizeInput.TargetThickness.HasValue
                 ? $"x{resizeInput.TargetThickness.Value:0.###}"
                 : string.Empty) +
-            ".dwg"
+            "_v2.dwg"
         );
 
         outputPath = GetAvailableOutputPath(outputPath);
@@ -654,6 +655,221 @@ internal static class Program_V2
             originalNestedVertex16Bindings,
             currentValues
         );
+    }
+
+    /*
+     * 이전 단일 파일 선택/입력창 기반 Main 흐름은 UI 일괄 처리 방식으로 교체했다.
+     * 실제 도면 수정 규칙은 ConvertDwgFileFromUi에서 동일한 순서로 호출한다.
+     */
+    private static void LegacySingleFileMainRemoved()
+    {
+        try
+        {
+            string? dwgPath = SelectDwgFile();
+
+            if (string.IsNullOrWhiteSpace(dwgPath))
+            {
+                return;
+            }
+
+            CadDocument document = DwgReader.Read(dwgPath);
+
+            DrawingData drawingData = ReadDrawingData(document);
+
+            string directory =
+                Path.GetDirectoryName(dwgPath)
+                ?? throw new Exception("선택한 DWG 파일의 폴더를 찾지 못했습니다.");
+
+            string fileName =
+                Path.GetFileNameWithoutExtension(dwgPath);
+
+            //도형 위치 출력 txt 파일
+            string reportPath = Path.Combine(
+                directory,
+                $"{fileName}_objects_v2.txt"
+            );
+
+            SaveEntityReport(
+                drawingData,
+                reportPath
+            );
+
+            // 패널 기준 객체:
+            // Layer="치구", POLYLINE 계열, 실제 표시 색상=흰색(ACI 7)
+            // 기준 폴리선의 외곽을 사방 30만큼 확장한 범위에
+            // 걸치는 모든 객체를 같은 패널로 묶는다.
+            List<PanelGroup> panelGroups = FindPanelGroups(
+                drawingData,
+                30.0
+            );
+
+            // 두께 패널은 도면에 있을 수도 있고 없을 수도 있다.
+            // 가로/세로 비율이 충분히 큰 패널만 선택적으로 두께 패널로 표시한다.
+            // 해당 조건을 만족하는 패널이 하나도 없어도 예외 없이 계속 진행한다.
+            ClassifyThicknessPanels(
+                panelGroups
+            );
+
+            // 크기 수정 전에 바깥 사각형 안에 닫힌 3~8꼭짓점 도형이 있는
+            // 패널과 그 안의
+            // 16꼭짓점 패널 관계를 기억한다. 재정렬할 때 둘을 같이 이동시킨다.
+            Dictionary<PanelGroup, List<PanelGroup>>
+                originalNestedVertex16Bindings =
+                    BindNestedVertex16Panels(
+                        panelGroups
+                            .Where(panel => !panel.IsThicknessPanel)
+                            .ToList()
+                    );
+
+            //패널안의 객체 출력 txt 파일
+            string panelReportPath = Path.Combine(
+                directory,
+                $"{fileName}_panels_v2.txt"
+            );
+
+            SavePanelGroupReport(
+                panelGroups,
+                panelReportPath
+            );
+
+            // 수정 UI에 표시할 현재값은 폴리선 크기가 아니라 DWG 치수값으로 읽는다.
+            // X/Y는 일반 패널 중 면적이 가장 큰 사각형 패널의 가로/세로 치수,
+            // 두께는 두께 패널에 포함된 짧은 방향 치수에서 가져온다.
+            CurrentDimensionValues currentValues =
+                ReadCurrentDimensionValues(panelGroups);
+
+            ResizeInput? resizeInput = ShowResizeInputDialog(
+                currentValues
+            );
+
+            if (resizeInput == null)
+            {
+                return;
+            }
+
+
+            // 목표 높이(두께)가 35 이하이면 두께 패널 묶음을 통째로 삭제한다.
+            // 기준 외곽뿐 아니라 빨간 박스, 치수 및 패널에 묶인 모든 객체를 제거하고
+            // 이후 크기 수정과 100 간격 재배치 대상에서도 제외한다.
+            double effectiveTargetThickness =
+                resizeInput.TargetThickness ??
+                currentValues.Thickness ??
+                double.PositiveInfinity;
+
+            bool thicknessPanelsRemoved =
+                effectiveTargetThickness <= 35.0;
+
+
+            if (thicknessPanelsRemoved)
+            {
+                RemoveThicknessPanelGroups(
+                    drawingData,
+                    panelGroups
+                );
+            }
+            // 흰색 치구 원 안에 볼트 구멍 레이어 원이 있는 관계를
+            // 도형 수정과 재배치 전에 기억한다.
+            List<ChiguCircleBoltBinding> chiguCircleBoltBindings =
+                FindChiguCircleBoltBindings(panelGroups);
+
+            ApplyPanelResize(
+                drawingData,
+                panelGroups,
+                currentValues,
+                resizeInput
+            );
+
+            // 패널 간격 계산에 수정된 치구 원 크기도 반영되게
+            // 재배치 전에 먼저 목표 지름과 볼트 중심을 적용한다.
+            ResizeChiguCirclesAroundBoltHoles(
+                chiguCircleBoltBindings,
+                resizeInput.TargetWidth,
+                resizeInput.TargetHeight
+            );
+
+            // 크기와 치수 수정이 끝난 뒤, 현재 패널 외곽 기준으로
+            // 왼쪽부터 패널 사이 간격을 정확히 100으로 재배치한다.
+            ArrangePanelGroupsWithGap(
+                panelGroups,
+                100.0,
+                30.0,
+                originalNestedVertex16Bindings
+            );
+
+            // 재배치가 모두 끝난 최종 볼트 구멍 중심을 기준으로
+            // 기존 흰색 치구 원의 중심과 지름을 다시 설정한다.
+            ResizeChiguCirclesAroundBoltHoles(
+                chiguCircleBoltBindings,
+                resizeInput.TargetWidth,
+                resizeInput.TargetHeight
+            );
+
+            ShowBoltHoleClearanceWarnings(
+                panelGroups,
+                3.9
+            );
+
+            string outputPath = Path.Combine(
+                directory,
+                $"{fileName}_{resizeInput.TargetWidth:0.###}x" +
+                $"{resizeInput.TargetHeight:0.###}" +
+                (resizeInput.TargetThickness.HasValue
+                    ? $"x{resizeInput.TargetThickness.Value:0.###}"
+                    : string.Empty) +
+                "_v2.dwg"
+            );
+
+            outputPath = GetAvailableOutputPath(outputPath);
+
+            SaveAsNewDwg(
+                document,
+                outputPath
+            );
+
+            MessageBox.Show(
+                "크기 및 치수 수정 완료\n\n" +
+                $"저장 위치: {outputPath}\n\n" +
+                $"X: {currentValues.Width:0.###} → {resizeInput.TargetWidth:0.###}\n" +
+                $"Y: {currentValues.Height:0.###} → {resizeInput.TargetHeight:0.###}\n" +
+                (thicknessPanelsRemoved
+                    ? "두께: 목표값 35 이하 — 두께 패널 삭제"
+                    : resizeInput.TargetThickness.HasValue && currentValues.Thickness.HasValue
+                        ? $"두께: {currentValues.Thickness.Value:0.###} → {resizeInput.TargetThickness.Value:0.###}"
+                        : "두께 패널 없음"),
+                "완료",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Information
+            );
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(
+                ex.ToString(),
+                "오류",
+                MessageBoxButtons.OK,
+                MessageBoxIcon.Error
+            );
+        }
+    }
+
+    /// <summary>
+    /// 사용자가 처리할 DWG 파일 하나를 선택한다.
+    /// </summary>
+    private static string? SelectDwgFile()
+    {
+        using OpenFileDialog dialog = new()
+        {
+            Title = "수정할 DWG 파일 선택",
+            Filter = "AutoCAD DWG 파일 (*.dwg)|*.dwg|모든 파일 (*.*)|*.*",
+            Multiselect = false,
+            CheckFileExists = true,
+            CheckPathExists = true,
+            RestoreDirectory = true
+        };
+
+        return dialog.ShowDialog() == DialogResult.OK
+            ? dialog.FileName
+            : null;
     }
 
     /// <summary>
@@ -2231,6 +2447,478 @@ internal static class Program_V2
             : DimensionDirection.Vertical;
     }
 
+    private static ResizeInput? ShowResizeInputDialog(
+        CurrentDimensionValues current
+    )
+    {
+        using Form form = new()
+        {
+            Text = "수정할 크기 입력",
+            Width = 420,
+            Height = 350,
+            StartPosition = FormStartPosition.CenterScreen,
+            FormBorderStyle = FormBorderStyle.FixedDialog,
+            MaximizeBox = false,
+            MinimizeBox = false
+        };
+
+        Label currentLabel = new()
+        {
+            Left = 25,
+            Top = 20,
+            Width = 360,
+            Height = 42,
+            Text = current.Thickness.HasValue
+                ? $"현재 치수: {current.Width:0.###} x {current.Height:0.###} x {current.Thickness.Value:0.###}"
+                : $"현재 치수: {current.Width:0.###} x {current.Height:0.###} x 두께 패널 없음"
+        };
+
+        Label widthLabel = new()
+        {
+            Left = 25,
+            Top = 85,
+            Width = 110,
+            Text = "목표 X(가로)"
+        };
+
+        NumericUpDown widthInput = CreateSizeInput(
+            150,
+            80,
+            current.Width
+        );
+
+        Label heightLabel = new()
+        {
+            Left = 25,
+            Top = 130,
+            Width = 110,
+            Text = "목표 Y(세로)"
+        };
+
+        NumericUpDown heightInput = CreateSizeInput(
+            150,
+            125,
+            current.Height
+        );
+
+        Label thicknessLabel = new()
+        {
+            Left = 25,
+            Top = 175,
+            Width = 110,
+            Text = "목표 높이(두께)"
+        };
+
+        NumericUpDown thicknessInput = CreateSizeInput(
+            150,
+            170,
+            current.Thickness ?? 0.001
+        );
+
+        if (!current.Thickness.HasValue)
+        {
+            thicknessInput.Enabled = false;
+            thicknessLabel.Text = "두께 패널 없음";
+        }
+
+        Button okButton = new()
+        {
+            Left = 170,
+            Top = 245,
+            Width = 90,
+            Height = 34,
+            Text = "확인",
+            DialogResult = DialogResult.OK
+        };
+
+        Button cancelButton = new()
+        {
+            Left = 270,
+            Top = 245,
+            Width = 90,
+            Height = 34,
+            Text = "취소",
+            DialogResult = DialogResult.Cancel
+        };
+
+        form.Controls.AddRange(
+        [
+            currentLabel,
+            widthLabel,
+            widthInput,
+            heightLabel,
+            heightInput,
+            thicknessLabel,
+            thicknessInput,
+            okButton,
+            cancelButton
+        ]);
+
+        form.AcceptButton = okButton;
+        form.CancelButton = cancelButton;
+
+        if (form.ShowDialog() != DialogResult.OK)
+        {
+            return null;
+        }
+
+        return new ResizeInput
+        {
+            TargetWidth = (double)widthInput.Value,
+            TargetHeight = (double)heightInput.Value,
+            TargetThickness = current.Thickness.HasValue
+                ? (double)thicknessInput.Value
+                : null
+        };
+    }
+
+    private static NumericUpDown CreateSizeInput(
+        int left,
+        int top,
+        double currentValue
+    )
+    {
+        decimal safeValue = (decimal)Math.Clamp(
+            currentValue,
+            0.001,
+            1000000.0
+        );
+
+        return new NumericUpDown
+        {
+            Left = left,
+            Top = top,
+            Width = 210,
+            DecimalPlaces = 3,
+            Minimum = 0.001m,
+            Maximum = 1000000m,
+            Increment = 1m,
+            Value = safeValue
+        };
+    }
+
+
+
+    private sealed class BoltHoleCircleGroup
+    {
+        public required List<EntityData> Circles { get; init; }
+
+        public double CenterX => Circles[0].CenterX;
+        public double CenterY => Circles[0].CenterY;
+        public int CircleCount => Circles.Count;
+    }
+
+    /// <summary>
+    /// 한 패널의 같은 Y축 줄에 중심이 같은 볼트 구멍 그룹이 정확히 4개 있을 때 처리한다.
+    /// 중심당 원이 2개인 2·2·2·2 형식은 목표 가로 120을 기준으로,
+    /// 중심당 원이 3개인 3·3·3·3 형식은 목표 가로 140을 기준으로 처리한다.
+    /// 기준 이하이면 바깥 2그룹, 기준 초과이면 중심에 가까운 2그룹을
+    /// 삭제 후보로 모은다. 후보가 하나 이상이면 확인창을 한 번 표시하고,
+    /// 사용자가 '예'를 선택한 경우에만 실제 삭제한다.
+    /// </summary>
+    private static void SelectBoltHolePairsByTargetWidth(
+        DrawingData drawingData,
+        IReadOnlyList<PanelGroup> panelGroups,
+        double targetWidth,
+        double centerTolerance = 0.001,
+        double yTolerance = 0.001
+    )
+    {
+        List<(PanelGroup Panel, BoltHoleCircleGroup Group)>
+            deletionCandidates = new();
+
+        HashSet<string> candidateGroupKeys = new(
+            StringComparer.OrdinalIgnoreCase
+        );
+
+        foreach (PanelGroup panel in panelGroups)
+        {
+            List<EntityData> boltCircles = panel.Entities
+                .Where(entity =>
+                    string.Equals(
+                        entity.LayerName,
+                        "볼트 구멍",
+                        StringComparison.OrdinalIgnoreCase
+                    ))
+                .Where(entity => entity.Entity is Circle)
+                .GroupBy(entity => entity.Handle)
+                .Select(group => group.First())
+                .ToList();
+
+            if (boltCircles.Count < 8)
+            {
+                continue;
+            }
+
+            List<BoltHoleCircleGroup> centerGroups =
+                BuildBoltHoleCenterGroups(
+                    boltCircles,
+                    centerTolerance
+                )
+                .Where(group =>
+                    group.CircleCount == 2 ||
+                    group.CircleCount == 3)
+                .ToList();
+
+            if (centerGroups.Count < 4)
+            {
+                continue;
+            }
+
+            List<List<BoltHoleCircleGroup>> yRows = new();
+
+            foreach (BoltHoleCircleGroup group in centerGroups
+                .OrderBy(item => item.CenterY)
+                .ThenBy(item => item.CenterX))
+            {
+                List<BoltHoleCircleGroup>? matchingRow =
+                    yRows.FirstOrDefault(row =>
+                        Math.Abs(row[0].CenterY - group.CenterY)
+                            <= yTolerance
+                    );
+
+                if (matchingRow == null)
+                {
+                    matchingRow = new List<BoltHoleCircleGroup>();
+                    yRows.Add(matchingRow);
+                }
+
+                matchingRow.Add(group);
+            }
+
+            DimensionBounds panelBounds =
+                GetCurrentBounds(panel.BasePolyline.Entity);
+
+            double panelCenterX =
+                (panelBounds.MinX + panelBounds.MaxX) / 2.0;
+
+            foreach (List<BoltHoleCircleGroup> row in yRows
+                .Where(row => row.Count == 4))
+            {
+                bool isTwoCirclePattern =
+                    row.All(group => group.CircleCount == 2);
+
+                bool isThreeCirclePattern =
+                    row.All(group => group.CircleCount == 3);
+
+                if (!isTwoCirclePattern &&
+                    !isThreeCirclePattern)
+                {
+                    continue;
+                }
+
+                double widthThreshold =
+                    isThreeCirclePattern
+                        ? 140.0
+                        : 120.0;
+
+                List<BoltHoleCircleGroup> orderedByCenterDistance = row
+                    .OrderBy(group =>
+                        Math.Abs(group.CenterX - panelCenterX))
+                    .ToList();
+
+                List<BoltHoleCircleGroup> groupsToDelete =
+                    targetWidth <= widthThreshold
+                        ? orderedByCenterDistance
+                            .Skip(2)
+                            .Take(2)
+                            .ToList()
+                        : orderedByCenterDistance
+                            .Take(2)
+                            .ToList();
+
+
+                foreach (BoltHoleCircleGroup group in groupsToDelete)
+                {
+                    string groupKey = string.Join(
+                        "|",
+                        group.Circles
+                            .Select(circle => circle.Handle)
+                            .OrderBy(handle => handle,
+                                StringComparer.OrdinalIgnoreCase)
+                    );
+
+                    if (candidateGroupKeys.Add(groupKey))
+                    {
+                        deletionCandidates.Add((panel, group));
+                    }
+                }
+            }
+        }
+
+        if (deletionCandidates.Count == 0)
+        {
+            return;
+        }
+
+        int candidateCircleCount = deletionCandidates
+            .SelectMany(candidate => candidate.Group.Circles)
+            .Select(circle => circle.Handle)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Count();
+
+        string panelNumbers = string.Join(
+            ", ",
+            deletionCandidates
+                .Select(candidate => candidate.Panel.Number)
+                .Distinct()
+                .OrderBy(number => number)
+        );
+
+        DialogResult deleteResult = MessageBox.Show(
+            "일자로 배치된 볼트 구멍 중 기존 크기 규칙에 따른 " +
+            "삭제 후보가 발견되었습니다.\n\n" +
+            $"대상 패널: {panelNumbers}\n" +
+            $"삭제 후보: {deletionCandidates.Count}쌍 " +
+            $"(원 {candidateCircleCount}개)\n" +
+            $"목표 가로: {targetWidth:0.###}\n\n" +
+            "삭제하시겠습니까?\n\n" +
+            "예: 후보 볼트 구멍 삭제\n" +
+            "아니요: 삭제하지 않고 그대로 유지",
+            "볼트 구멍 삭제 확인",
+            MessageBoxButtons.YesNo,
+            MessageBoxIcon.Warning,
+            MessageBoxDefaultButton.Button2
+        );
+
+        if (deleteResult != DialogResult.Yes)
+        {
+            return;
+        }
+
+        HashSet<string> deletedCircleHandles = new(
+            StringComparer.OrdinalIgnoreCase
+        );
+
+        foreach (var candidate in deletionCandidates)
+        {
+            foreach (EntityData circleData in candidate.Group.Circles)
+            {
+                if (!deletedCircleHandles.Add(circleData.Handle))
+                {
+                    continue;
+                }
+
+                RemoveEntityFromDrawing(
+                    drawingData,
+                    circleData
+                );
+
+                // 혹시 같은 원이 다른 패널 구성원에도 들어 있으면
+                // 모든 패널 목록에서 함께 제거한다.
+                foreach (PanelGroup targetPanel in panelGroups)
+                {
+                    targetPanel.Entities.RemoveAll(entity =>
+                        string.Equals(
+                            entity.Handle,
+                            circleData.Handle,
+                            StringComparison.OrdinalIgnoreCase
+                        )
+                    );
+                }
+            }
+        }
+
+    }
+
+    private static List<BoltHoleCircleGroup> BuildBoltHoleCenterGroups(
+        IReadOnlyList<EntityData> circles,
+        double centerTolerance
+    )
+    {
+        List<BoltHoleCircleGroup> result = new();
+        HashSet<string> usedHandles = new(
+            StringComparer.OrdinalIgnoreCase
+        );
+
+        foreach (EntityData seed in circles)
+        {
+            if (usedHandles.Contains(seed.Handle))
+            {
+                continue;
+            }
+
+            List<EntityData> sameCenter = circles
+                .Where(candidate =>
+                    !usedHandles.Contains(candidate.Handle))
+                .Where(candidate =>
+                    Math.Abs(candidate.CenterX - seed.CenterX)
+                        <= centerTolerance &&
+                    Math.Abs(candidate.CenterY - seed.CenterY)
+                        <= centerTolerance)
+                .OrderByDescending(candidate => candidate.Radius)
+                .ToList();
+
+            List<EntityData> distinctRadiusCircles = new();
+
+            foreach (EntityData candidate in sameCenter)
+            {
+                bool duplicateRadius =
+                    distinctRadiusCircles.Any(existing =>
+                        Math.Abs(existing.Radius - candidate.Radius)
+                            <= 0.000001
+                    );
+
+                if (!duplicateRadius)
+                {
+                    distinctRadiusCircles.Add(candidate);
+                }
+            }
+
+            if (distinctRadiusCircles.Count < 2)
+            {
+                continue;
+            }
+
+            foreach (EntityData item in sameCenter)
+            {
+                usedHandles.Add(item.Handle);
+            }
+
+            result.Add(new BoltHoleCircleGroup
+            {
+                Circles = distinctRadiusCircles
+            });
+        }
+
+        return result;
+    }
+
+    private static void RemoveEntityFromDrawing(
+        DrawingData drawingData,
+        EntityData entityData
+    )
+    {
+        Entity entity = entityData.Entity;
+
+        if (drawingData.Document.Entities.Contains(entity))
+        {
+            drawingData.Document.Entities.Remove(entity);
+        }
+        else
+        {
+            foreach (var blockRecord in drawingData.Document.BlockRecords)
+            {
+                if (!blockRecord.Entities.Contains(entity))
+                {
+                    continue;
+                }
+
+                blockRecord.Entities.Remove(entity);
+                break;
+            }
+        }
+
+        drawingData.Entities.RemoveAll(item =>
+            string.Equals(
+                item.Handle,
+                entityData.Handle,
+                StringComparison.OrdinalIgnoreCase
+            )
+        );
+    }
+
+
     /// <summary>
     /// 목표 높이가 35 이하일 때 두께 패널 묶음을 DWG에서 삭제한다.
     /// 패널 기준 폴리선뿐 아니라 빨간 박스, 치수 및 묶인 모든 객체를 제거하며,
@@ -3627,114 +4315,7 @@ internal static class Program_V2
 
         // 숫자가 직접 입력된 치수 문자는 기존 숫자가 남으므로 자동 측정값으로 되돌린다.
         dimension.Text = string.Empty;
-        UpdateDimensionBlockPreservingTextHeight(dimension);
-    }
-
-    /// <summary>
-    /// ACadSharp가 짧은 치수의 익명 블록을 다시 만들 때 치수 문자를
-    /// 임의로 축소하지 않도록, 재생성 전 문자 높이를 재생성 후 복원한다.
-    /// 측정값, 치수선 및 화살표 위치에는 영향을 주지 않는다.
-    /// </summary>
-    private static void UpdateDimensionBlockPreservingTextHeight(
-        Dimension dimension
-    )
-    {
-        double? originalTextHeight =
-            ReadDimensionBlockTextHeight(dimension);
-
         dimension.UpdateBlock();
-
-        if (originalTextHeight.HasValue)
-        {
-            SetDimensionBlockTextHeight(
-                dimension,
-                originalTextHeight.Value
-            );
-        }
-    }
-
-    private static double? ReadDimensionBlockTextHeight(
-        Dimension dimension
-    )
-    {
-        if (dimension.Block == null)
-        {
-            return null;
-        }
-
-        double height = dimension.Block.Entities
-            .Where(entity => entity is TextEntity or MText)
-            .Select(TryReadTextEntityHeight)
-            .Where(height => height.HasValue && height.Value > 0.0)
-            .Select(height => height!.Value)
-            .DefaultIfEmpty()
-            .Max();
-
-        return height > 0.0 ? height : null;
-    }
-
-    private static double? TryReadTextEntityHeight(
-        Entity textEntity
-    )
-    {
-        foreach (string propertyName in new[] { "Height", "TextHeight" })
-        {
-            PropertyInfo? property = textEntity.GetType().GetProperty(
-                propertyName,
-                BindingFlags.Instance | BindingFlags.Public
-            );
-
-            if (property?.CanRead == true &&
-                property.GetValue(textEntity) is double height)
-            {
-                return height;
-            }
-        }
-
-        return null;
-    }
-
-    private static void SetDimensionBlockTextHeight(
-        Dimension dimension,
-        double textHeight
-    )
-    {
-        if (dimension.Block == null ||
-            !double.IsFinite(textHeight) ||
-            textHeight <= 0.0)
-        {
-            return;
-        }
-
-        foreach (Entity textEntity in dimension.Block.Entities
-            .Where(entity => entity is TextEntity or MText))
-        {
-            foreach (string propertyName in
-                new[] { "Height", "TextHeight" })
-            {
-                PropertyInfo? property = textEntity.GetType().GetProperty(
-                    propertyName,
-                    BindingFlags.Instance | BindingFlags.Public
-                );
-
-                if (property?.CanWrite == true &&
-                    property.PropertyType == typeof(double))
-                {
-                    try
-                    {
-                        property.SetValue(textEntity, textHeight);
-                    }
-                    catch
-                    {
-                        // 라이브러리 버전에서 계산 속성으로 제공되면
-                        // 다음 후보 속성을 확인한다.
-                        continue;
-                    }
-
-                    break;
-                }
-            }
-        }
     }
 
     private static XYZ MapPointByBounds(
@@ -4073,8 +4654,8 @@ internal static class Program_V2
             );
 
 
-        // 일반 패널과 연결된 두께 패널은 설정된 두께판 간격으로
-        // 위/아래/좌/우 위치를 확정한다.
+        // 빨간 묶음 안의 일반 패널과 연결된 두께 패널은
+        // 위/아래/좌/우 30 간격 위치로 확정한다.
         foreach (PanelGroup mainPanel in mainPanels)
         {
             if (!thicknessBindings.TryGetValue(
@@ -4101,8 +4682,7 @@ internal static class Program_V2
                 nestedVertex16Bindings[mainPanels[0]]
             );
 
-        // 두 번째 조립 묶음부터 이전 조립 묶음 전체 오른쪽 끝에서
-        // 설정된 일반 패널 간격만큼 띄운다.
+        // 두 번째 조립 묶음부터 이전 조립 묶음 전체 오른쪽 끝에서 gap만큼 띄운다.
         for (int index = 1; index < mainPanels.Count; index++)
         {
             PanelGroup mainPanel = mainPanels[index];
@@ -4647,7 +5227,7 @@ internal static class Program_V2
                     dimension.TextMiddlePoint.Z
                 );
 
-                UpdateDimensionBlockPreservingTextHeight(dimension);
+                dimension.UpdateBlock();
                 break;
 
             case LwPolyline polyline:
@@ -4744,449 +5324,473 @@ internal static class Program_V2
         string outputPath
     )
     {
-        // 원본 문서를 덮어쓰지 않고 새 문서를 만든다.
-        // 가공 형상은 새로 생성하고, 수정된 치수와 텍스트도 함께 보존한다.
-        CadDocument cncDocument =
-            CreateCncOutputDocument(document);
+        // 원본 CadDocument를 그대로 다시 쓰면 삭제된 객체의 Handle이나
+        // BlockRecord 참조가 남을 수 있다. 최종 형상만 새 문서로 복제해
+        // Handle, Owner 및 테이블 참조를 처음부터 다시 구성한다.
+        CadDocument cleanDocument =
+            CreateCleanOutputDocument(document);
 
-        DisableOutputGrid(cncDocument);
+        // ACadSharp가 복제하거나 치수 UpdateBlock()으로 생성한 객체 중
+        // 일부가 잘못된 가시성 값으로 기록되면 AutoCAD AUDIT에서
+        // "객체 가시성이 부정확함" 오류가 반복된다.
+        // 저장 직전에 모든 공간과 블록 내부 엔티티를 정상 표시 상태로 맞춘다.
+        NormalizeEntityVisibility(cleanDocument);
 
-        ValidateEntitiesBeforeSave(cncDocument);
+        ValidateEntitiesBeforeSave(cleanDocument);
 
         using DwgWriter writer = new(
             outputPath,
-            cncDocument
+            cleanDocument
         );
 
         writer.Write();
     }
 
+    private static void NormalizeEntityVisibility(
+        CadDocument document
+    )
+    {
+        HashSet<Entity> normalizedEntities = new();
+
+        foreach (BlockRecord block in document.BlockRecords)
+        {
+            foreach (Entity entity in block.Entities)
+            {
+                if (normalizedEntities.Add(entity))
+                {
+                    entity.IsInvisible = false;
+                }
+            }
+        }
+
+        // 라이브러리 버전에 따라 Model Space 열거가 BlockRecords와
+        // 완전히 같지 않을 수 있으므로 문서 엔티티도 한 번 더 확인한다.
+        foreach (Entity entity in document.Entities)
+        {
+            if (normalizedEntities.Add(entity))
+            {
+                entity.IsInvisible = false;
+            }
+        }
+    }
+
     /// <summary>
-    /// 가공용 기본 형상은 좌표값으로 새로 생성한다.
-    /// 치수와 텍스트는 스타일 및 치수 표시 블록을 포함하여 복제하고,
-    /// 복제 객체의 확장 사전은 제거한다.
+    /// 생성된 DWG와 같은 폴더에 원본/수정 후 구성요소 보고서를 저장한다.
+    /// 원본 보고서는 도면 수정 전에 만든 문자열을 사용하므로 실제 입력
+    /// 파일 상태와 새 CadDocument 상태를 서로 비교할 수 있다.
     /// </summary>
-    private static CadDocument CreateCncOutputDocument(
+    private static void SaveDocumentComponentReports(
+        string outputDwgPath,
+        string originalDocumentComponentReport,
+        CadDocument cleanDocument
+    )
+    {
+        string outputDirectory =
+            Path.GetDirectoryName(outputDwgPath)
+            ?? throw new Exception(
+                "출력 DWG 파일의 폴더를 찾지 못했습니다."
+            );
+
+        string outputFileName =
+            Path.GetFileNameWithoutExtension(outputDwgPath);
+
+        string originalReportPath = Path.Combine(
+            outputDirectory,
+            $"{outputFileName}_원본_구성요소.txt"
+        );
+
+        string modifiedReportPath = Path.Combine(
+            outputDirectory,
+            $"{outputFileName}_수정후_구성요소.txt"
+        );
+
+        File.WriteAllText(
+            originalReportPath,
+            originalDocumentComponentReport,
+            new UTF8Encoding(true)
+        );
+
+        File.WriteAllText(
+            modifiedReportPath,
+            BuildDocumentComponentReport(
+                cleanDocument,
+                "수정 후 새 도면"
+            ),
+            new UTF8Encoding(true)
+        );
+    }
+
+    /// <summary>
+    /// 프록시 경고 원인을 비교할 수 있도록 문서의 DXF 클래스, 테이블,
+    /// Layout, BlockRecord 및 각 공간의 엔티티를 한 보고서로 만든다.
+    /// </summary>
+    private static string BuildDocumentComponentReport(
+        CadDocument document,
+        string reportTitle
+    )
+    {
+        StringBuilder builder = new();
+
+        builder.AppendLine($"===== {reportTitle} 구성요소 =====");
+        builder.AppendLine($"작성 시각: {DateTime.Now:yyyy-MM-dd HH:mm:ss}");
+        builder.AppendLine($"DWG 버전: {document.Header.Version}");
+        builder.AppendLine($"코드 페이지: {document.Header.CodePage}");
+        builder.AppendLine($"Handle Seed: {document.Header.HandleSeed:X}");
+        builder.AppendLine();
+
+        WriteDxfClassReport(builder, document);
+        WriteTableReport(builder, document);
+        WriteLayoutReport(builder, document);
+        WriteBlockAndEntityReport(builder, document);
+
+        return builder.ToString();
+    }
+
+    private static void WriteDxfClassReport(
+        StringBuilder builder,
+        CadDocument document
+    )
+    {
+        builder.AppendLine("[DXF CLASS / 프록시 확인]");
+        builder.AppendLine($"CLASS 수: {document.Classes.Count}");
+
+        int index = 0;
+        foreach (ACadSharp.Classes.DxfClass dxfClass in
+            document.Classes.OrderBy(item => item.ClassNumber))
+        {
+            builder.AppendLine(
+                $"  [{index++}] Number={dxfClass.ClassNumber}, " +
+                $"DXF={dxfClass.DxfName}, " +
+                $"C++={dxfClass.CppClassName}, " +
+                $"Application={dxfClass.ApplicationName}, " +
+                $"Instances={dxfClass.InstanceCount}, " +
+                $"Entity={dxfClass.IsAnEntity}, " +
+                $"WasProxy={dxfClass.WasZombie}, " +
+                $"ProxyFlags={dxfClass.ProxyFlags}, " +
+                $"Version={dxfClass.DwgVersion}"
+            );
+        }
+
+        builder.AppendLine();
+    }
+
+    private static void WriteTableReport(
+        StringBuilder builder,
+        CadDocument document
+    )
+    {
+        builder.AppendLine("[TABLE 요약]");
+        builder.AppendLine($"레이어: {document.Layers.Count}");
+        foreach (Layer layer in document.Layers.OrderBy(item => item.Name))
+        {
+            builder.AppendLine(
+                $"  Layer: Name={layer.Name}, " +
+                $"Handle={layer.Handle:X}, " +
+                $"Color={layer.Color.Index}, " +
+                $"LineType={layer.LineType?.Name ?? "(없음)"}"
+            );
+        }
+
+        builder.AppendLine($"선종류: {document.LineTypes.Count}");
+        foreach (LineType lineType in
+            document.LineTypes.OrderBy(item => item.Name))
+        {
+            builder.AppendLine(
+                $"  LineType: Name={lineType.Name}, " +
+                $"Handle={lineType.Handle:X}"
+            );
+        }
+
+        builder.AppendLine($"문자 스타일: {document.TextStyles.Count}");
+        foreach (TextStyle textStyle in
+            document.TextStyles.OrderBy(item => item.Name))
+        {
+            builder.AppendLine(
+                $"  TextStyle: Name={textStyle.Name}, " +
+                $"Handle={textStyle.Handle:X}, " +
+                $"Height={textStyle.Height:0.######}, " +
+                $"LastHeight={textStyle.LastHeight:0.######}, " +
+                $"Width={textStyle.Width:0.######}, " +
+                $"Font={textStyle.Filename}, " +
+                $"BigFont={textStyle.BigFontFilename}"
+            );
+        }
+
+        builder.AppendLine($"치수 스타일: {document.DimensionStyles.Count}");
+        foreach (DimensionStyle dimensionStyle in
+            document.DimensionStyles.OrderBy(item => item.Name))
+        {
+            builder.AppendLine(
+                $"  DimStyle: Name={dimensionStyle.Name}, " +
+                $"Handle={dimensionStyle.Handle:X}, " +
+                $"TextStyle={dimensionStyle.Style?.Name ?? "(없음)"}, " +
+                $"TextHeight={dimensionStyle.TextHeight:0.######}, " +
+                $"ArrowSize={dimensionStyle.ArrowSize:0.######}, " +
+                $"ScaleFactor={dimensionStyle.ScaleFactor:0.######}, " +
+                $"LineType={dimensionStyle.LineType?.Name ?? "(없음)"}, " +
+                $"ArrowBlock={dimensionStyle.ArrowBlock?.Name ?? "(없음)"}"
+            );
+        }
+
+        builder.AppendLine($"블록 레코드: {document.BlockRecords.Count}");
+        builder.AppendLine($"등록 앱: {document.AppIds.Count}");
+        builder.AppendLine($"UCS: {document.UCSs.Count}");
+        builder.AppendLine($"View: {document.Views.Count}");
+        builder.AppendLine($"VPort: {document.VPorts.Count}");
+        builder.AppendLine();
+    }
+
+    private static void WriteLayoutReport(
+        StringBuilder builder,
+        CadDocument document
+    )
+    {
+        builder.AppendLine("[LAYOUT]");
+
+        List<Layout> layouts = document.Layouts?.ToList()
+            ?? new List<Layout>();
+
+        builder.AppendLine($"Layout 수: {layouts.Count}");
+        foreach (Layout layout in layouts.OrderBy(item => item.TabOrder))
+        {
+            builder.AppendLine(
+                $"  Name={layout.Name}, " +
+                $"Handle={layout.Handle:X}, " +
+                $"TabOrder={layout.TabOrder}, " +
+                $"PaperSpace={layout.IsPaperSpace}, " +
+                $"Block={layout.AssociatedBlock?.Name ?? "(없음)"}, " +
+                $"EntityCount={layout.AssociatedBlock?.Entities.Count ?? 0}"
+            );
+        }
+
+        builder.AppendLine();
+    }
+
+    private static void WriteBlockAndEntityReport(
+        StringBuilder builder,
+        CadDocument document
+    )
+    {
+        builder.AppendLine("[BLOCK / ENTITY]");
+
+        foreach (BlockRecord block in
+            document.BlockRecords.OrderBy(item => item.Name))
+        {
+            builder.AppendLine(
+                $"Block: Name={block.Name}, " +
+                $"Handle={block.Handle:X}, " +
+                $"EntityCount={block.Entities.Count}"
+            );
+
+            foreach (IGrouping<string, Entity> group in
+                block.Entities
+                    .GroupBy(entity => entity.ObjectName)
+                    .OrderBy(group => group.Key))
+            {
+                builder.AppendLine(
+                    $"  종류 합계: {group.Key} = {group.Count()}"
+                );
+            }
+
+            int entityIndex = 0;
+            foreach (Entity entity in block.Entities)
+            {
+                builder.Append(
+                    $"  [{entityIndex++}] " +
+                    $"DXF={entity.ObjectName}, " +
+                    $"CLR={entity.GetType().FullName}, " +
+                    $"Handle={entity.Handle:X}, " +
+                    $"Layer={entity.Layer?.Name ?? "(없음)"}, " +
+                    $"Color={entity.Color.Index}"
+                );
+
+                switch (entity)
+                {
+                    case TextEntity text:
+                        builder.Append(
+                            $", TextStyle={text.Style?.Name ?? "(없음)"}, " +
+                            $"Height={text.Height:0.######}"
+                        );
+                        break;
+
+                    case MText mText:
+                        builder.Append(
+                            $", TextStyle={mText.Style?.Name ?? "(없음)"}, " +
+                            $"Height={mText.Height:0.######}"
+                        );
+                        break;
+
+                    case Dimension dimension:
+                        builder.Append(
+                            $", DimStyle={dimension.Style?.Name ?? "(없음)"}, " +
+                            $"Measurement={dimension.Measurement:0.######}, " +
+                            $"DimBlock={dimension.Block?.Name ?? "(없음)"}"
+                        );
+                        break;
+
+                    case Insert insert:
+                        builder.Append(
+                            $", InsertBlock={insert.Block?.Name ?? "(없음)"}"
+                        );
+                        break;
+                }
+
+                builder.AppendLine();
+            }
+
+            builder.AppendLine();
+        }
+    }
+
+    /// <summary>
+    /// 수정 결과에서 실제로 사용하는 객체만 새 CadDocument로 옮긴다.
+    /// Clone된 객체는 Handle과 Owner가 초기화되며 새 문서에 추가될 때
+    /// Layer, LineType, DimensionStyle 및 BlockRecord가 새로 등록된다.
+    /// </summary>
+    private static CadDocument CreateCleanOutputDocument(
         CadDocument sourceDocument
     )
     {
-        CadDocument cncDocument = new(
+        // 기본 문서를 만든 뒤 Header.Version만 바꾸면, 생성 시 들어간
+        // 기본 ObjectDBX 객체는 처음 버전의 형식으로 남을 수 있다.
+        // 처음부터 원본과 같은 버전으로 생성해야 내부 기본 객체까지
+        // 동일한 DWG 버전에 맞게 만들어진다.
+        CadDocument cleanDocument = new(
             sourceDocument.Header.Version
         );
 
-        // 구형 DWG에 필요 없는 최신 비그래픽 기본 객체를 제거한다.
-        // 출력에는 TABLE, MATERIAL, 주석 축척 및 MLEADER를 만들지 않는다.
-        cncDocument.TableStyles?.Clear();
-        cncDocument.Materials?.Clear();
-        cncDocument.Scales?.Clear();
-        cncDocument.MLeaderStyles?.Clear();
+        // CadDocument(AC1015)도 ACadSharp 내부에서 최신 버전용 기본
+        // 비그래픽 객체를 자동 생성한다. 원본 AutoCAD 2000 도면에는
+        // 없던 아래 22개 객체가 ObjectDBX 프록시로 표시되므로 제거한다.
+        // TABLESTYLE 1 + MATERIAL 3 + SCALE 17 + MLEADERSTYLE 1 = 22
+        RemoveModernDefaultObjects(cleanDocument);
 
-        cncDocument.Header.CodePage =
+        // ACadSharp가 새 CadDocument에 자동 생성하는 Paper Space Viewport가
+        // AutoCAD AUDIT에서 반복되는 단일 가시성 오류의 원인이 될 수 있다.
+        // CNC 출력은 Model Space만 사용하므로 저장 전에 제거하고,
+        // AutoCAD가 필요할 때 정상 Viewport를 다시 만들도록 둔다.
+        RemoveGeneratedViewports(cleanDocument);
+
+        // AC1015 같은 구형 DWG는 문자열을 유니코드가 아니라 도면의
+        // 코드페이지로 기록한다. 새 문서의 기본 ANSI_1252를 그대로
+        // 사용하면 한글 Layout 이름과 한글 문자가 ??로 치환된다.
+        // 원본에서 읽은 DWGCODEPAGE를 반드시 새 문서에도 유지한다.
+        cleanDocument.Header.CodePage =
             sourceDocument.Header.CodePage;
-        cncDocument.Header.ShowModelSpace = true;
 
-        CopySourceDrawingStyles(sourceDocument, cncDocument);
+        cleanDocument.Header.ShowModelSpace = true;
 
-        List<string> unsupportedEntityTypes = new();
+        // 객체를 먼저 추가하면 같은 이름의 기본 Standard 스타일에
+        // 연결되면서 원본의 글자 높이, 화살표 크기 등이 사라진다.
+        // 모든 객체와 Layout을 복사하기 전에 원본 스타일을 구성한다.
+        CopySourceDrawingStyles(
+            sourceDocument,
+            cleanDocument
+        );
+
+        List<string> skippedEntityTypes = new();
 
         foreach (Entity sourceEntity in sourceDocument.Entities)
         {
-            // 화면 표시용 뷰포트만 제외한다. 치수와 텍스트는 출력에 포함한다.
+            // 새 CadDocument가 정상적인 기본 Paper Space와 Viewport를
+            // 이미 생성한다. 원본 Viewport를 다시 복제하면 Layout 참조와
+            // 가시성 값이 충돌해 AUDIT 오류가 반복될 수 있으므로 제외한다.
             if (sourceEntity is Viewport)
             {
                 continue;
             }
 
-            Entity? newEntity = sourceEntity is TextEntity or MText or Dimension
-                ? CloneOutputAnnotation(sourceEntity, cncDocument)
-                : CreateNewCncGeometryEntity(sourceEntity);
-
-            if (newEntity == null)
+            if (!IsSupportedCleanOutputEntity(sourceEntity))
             {
-                unsupportedEntityTypes.Add(
-                    sourceEntity.ObjectName
-                );
+                skippedEntityTypes.Add(sourceEntity.ObjectName);
                 continue;
             }
 
-            newEntity.Layer = GetOrCreateCncLayer(
-                cncDocument,
-                sourceEntity.Layer
-            );
-            newEntity.Color = sourceEntity.Color;
-            newEntity.LineTypeScale =
-                sourceEntity.LineTypeScale;
+            Entity clonedEntity =
+                (Entity)sourceEntity.Clone();
 
-            cncDocument.Entities.Add(newEntity);
+            // Clone은 Reactor와 Handle은 제거하지만 XDictionary는 복제한다.
+            // 원본 파일의 사전 참조가 출력 파일로 따라오지 않게 제거한다.
+            RemoveExtendedDictionaryFromClone(clonedEntity);
 
-            // 이미 갱신된 표시 블록은 그대로 보존하여 문자 크기/배치를 유지한다.
-            if (newEntity is Dimension dimension &&
-                (dimension.Block == null || dimension.Block.Entities.Count == 0))
+            cleanDocument.Entities.Add(clonedEntity);
+
+            // 치수는 원본 익명 치수 블록을 그대로 사용하지 않고,
+            // 새 문서에 연결된 뒤 현재 좌표와 스타일로 다시 생성한다.
+            if (clonedEntity is Dimension dimension)
             {
-                UpdateDimensionBlockPreservingTextHeight(dimension);
+                dimension.UpdateBlock();
             }
         }
 
-        if (cncDocument.Entities.Count == 0 &&
+        // Paper Space/Layout은 복제하지 않는다. 새 문서가 생성한 정상적인
+        // 기본 Layout과 Viewport를 그대로 사용해 단일 Viewport의 잘못된
+        // Visibility 및 소유자 참조가 출력 파일로 따라오는 것을 막는다.
+
+        if (cleanDocument.Entities.Count == 0 &&
             sourceDocument.Entities.Count > 0)
         {
             throw new Exception(
-                "CNC용 새 DWG에 생성할 수 있는 형상이 없습니다."
+                "새 DWG로 옮길 수 있는 지원 객체가 없습니다."
             );
         }
 
-        if (unsupportedEntityTypes.Count > 0)
+        if (skippedEntityTypes.Count > 0)
         {
-            string unsupportedTypes = string.Join(
+            string skippedTypes = string.Join(
                 ", ",
-                unsupportedEntityTypes
+                skippedEntityTypes
                     .Distinct(StringComparer.OrdinalIgnoreCase)
                     .OrderBy(name => name)
             );
 
             throw new NotSupportedException(
-                "CNC용 새 도면으로 다시 만들 수 없는 형상이 있습니다: " +
-                unsupportedTypes +
-                "\n형상이 누락되지 않도록 저장을 중단했습니다."
+                "새 DWG 재구성에서 아직 지원하지 않는 객체가 있습니다: " +
+                skippedTypes +
+                "\n객체가 누락된 도면을 저장하지 않도록 작업을 중단했습니다."
             );
         }
 
-        UpdateCleanDocumentDisplayBounds(cncDocument);
-        cncDocument.UpdateDxfClasses(true);
+        // 새 문서는 기본 화면 중심과 도면 범위가 (0, 0)에 머문다.
+        // 실제 출력 객체 범위로 갱신하지 않으면 정상 객체가 저장되어도
+        // 파일을 처음 열었을 때 빈 화면처럼 보일 수 있다.
+        UpdateCleanDocumentDisplayBounds(cleanDocument);
 
-        return cncDocument;
-    }
+        // 새 문서에 실제로 들어간 객체를 기준으로 CLASS 테이블을 다시
+        // 구성해 원본의 ObjectDBX/Proxy 클래스 정보가 남지 않게 한다.
+        cleanDocument.UpdateDxfClasses(true);
 
-    // 수정 과정에서 갱신된 치수/문자를 새 문서의 스타일에 연결한다.
-    private static Entity CloneOutputAnnotation(
-        Entity sourceEntity,
-        CadDocument targetDocument
-    )
-    {
-        Entity clone = (Entity)sourceEntity.Clone();
-        RemoveExtendedDictionaryFromClone(clone);
-        ReconnectOutputAnnotationStyle(clone, targetDocument);
-
-        if (clone is Dimension dimension && dimension.Block != null)
-        {
-            RemoveExtendedDictionaryFromClone(dimension.Block);
-            foreach (Entity blockEntity in dimension.Block.Entities)
-            {
-                RemoveExtendedDictionaryFromClone(blockEntity);
-                ReconnectOutputAnnotationStyle(blockEntity, targetDocument);
-            }
-        }
-
-        return clone;
-    }
-
-    private static void ReconnectOutputAnnotationStyle(
-        Entity entity,
-        CadDocument targetDocument
-    )
-    {
-        switch (entity)
-        {
-            case TextEntity text:
-                text.Style = targetDocument.TextStyles[text.Style.Name];
-                break;
-            case MText text:
-                text.Style = targetDocument.TextStyles[text.Style.Name];
-                break;
-            case Dimension dimension:
-                dimension.Style = targetDocument.DimensionStyles[dimension.Style.Name];
-                break;
-        }
-    }
-
-    // 새 도면의 VPort.ShowGrid 기본값은 true이므로 저장 직전에 끈다.
-    private static void DisableOutputGrid(CadDocument document)
-    {
-        object? table = typeof(CadDocument).GetProperty("VPorts")?
-            .GetValue(document);
-        int updated = 0;
-        if (table is System.Collections.IEnumerable viewports)
-        {
-            foreach (VPort viewport in viewports.OfType<VPort>())
-            {
-                viewport.ShowGrid = false;
-                updated++;
-            }
-        }
-
-        if (updated == 0)
-        {
-            throw new NotSupportedException(
-                "그리드를 끌 VPort를 찾지 못했습니다. ACadSharp 버전을 확인해 주세요."
-            );
-        }
+        return cleanDocument;
     }
 
     /// <summary>
-    /// 원본 객체의 좌표값만 사용하여 완전히 새로운 기본 도형을 만든다.
-    /// POLYLINE2D는 CNC 호환성이 높은 LWPOLYLINE으로 평면 변환한다.
+    /// AC1015 새 문서에 ACadSharp가 자동으로 넣는 최신 버전용 기본
+    /// 객체를 제거한다. 현재 변환 대상에는 TABLE, MATERIAL 지정,
+    /// 주석 축척 또는 MLEADER가 없으므로 도면 형상에는 영향을 주지 않는다.
     /// </summary>
-    private static Entity? CreateNewCncGeometryEntity(
-        Entity sourceEntity
+    private static void RemoveModernDefaultObjects(
+        CadDocument document
     )
     {
-        switch (sourceEntity)
-        {
-            case Line sourceLine:
-                return new Line
-                {
-                    StartPoint = new XYZ(
-                        sourceLine.StartPoint.X,
-                        sourceLine.StartPoint.Y,
-                        sourceLine.StartPoint.Z
-                    ),
-                    EndPoint = new XYZ(
-                        sourceLine.EndPoint.X,
-                        sourceLine.EndPoint.Y,
-                        sourceLine.EndPoint.Z
-                    )
-                };
-
-            case Arc sourceArc:
-                return new Arc
-                {
-                    Center = new XYZ(
-                        sourceArc.Center.X,
-                        sourceArc.Center.Y,
-                        sourceArc.Center.Z
-                    ),
-                    Radius = sourceArc.Radius,
-                    StartAngle = sourceArc.StartAngle,
-                    EndAngle = sourceArc.EndAngle
-                };
-
-            case Circle sourceCircle:
-                return new Circle
-                {
-                    Center = new XYZ(
-                        sourceCircle.Center.X,
-                        sourceCircle.Center.Y,
-                        sourceCircle.Center.Z
-                    ),
-                    Radius = sourceCircle.Radius
-                };
-
-            case LwPolyline sourcePolyline:
-            {
-                LwPolyline newPolyline = new()
-                {
-                    IsClosed = sourcePolyline.IsClosed
-                };
-
-                foreach (LwPolyline.Vertex sourceVertex in
-                    sourcePolyline.Vertices)
-                {
-                    newPolyline.Vertices.Add(
-                        new LwPolyline.Vertex(
-                            new XY(
-                                sourceVertex.Location.X,
-                                sourceVertex.Location.Y
-                            )
-                        )
-                        {
-                            Bulge = sourceVertex.Bulge
-                        }
-                    );
-                }
-
-                return newPolyline;
-            }
-
-            case Polyline2D sourcePolyline:
-            {
-                LwPolyline newPolyline = new()
-                {
-                    IsClosed = sourcePolyline.IsClosed
-                };
-
-                foreach (var sourceVertex in
-                    sourcePolyline.Vertices)
-                {
-                    newPolyline.Vertices.Add(
-                        new LwPolyline.Vertex(
-                            new XY(
-                                sourceVertex.Location.X,
-                                sourceVertex.Location.Y
-                            )
-                        )
-                    );
-                }
-
-                return newPolyline;
-            }
-
-            default:
-                return null;
-        }
+        document.TableStyles?.Clear();
+        document.Materials?.Clear();
+        document.Scales?.Clear();
+        document.MLeaderStyles?.Clear();
     }
 
-    private static Layer GetOrCreateCncLayer(
-        CadDocument targetDocument,
-        Layer sourceLayer
+    private static void RemoveGeneratedViewports(
+        CadDocument document
     )
     {
-        if (targetDocument.Layers.TryGetValue(
-            sourceLayer.Name,
-            out Layer targetLayer
-        ))
+        foreach (BlockRecord block in document.BlockRecords)
         {
-            return targetLayer;
-        }
-
-        Layer newLayer = new(sourceLayer.Name)
-        {
-            Color = sourceLayer.Color
-        };
-
-        targetDocument.Layers.Add(newLayer);
-        return newLayer;
-    }
-
-    /// <summary>
-    /// 새 출력 문서의 도면 설정을 원본과 동일하게 맞춘다.
-    /// 객체 참조나 컬렉션은 새 문서에서 다시 구성해야 하므로 제외하고,
-    /// Header의 값 형식 설정과 VPort별 화면 설정만 안전하게 복사한다.
-    /// </summary>
-    private static void CopySourceDocumentSettings(
-        CadDocument sourceDocument,
-        CadDocument targetDocument
-    )
-    {
-        HashSet<string> headerExclusions = new(
-            StringComparer.Ordinal
-        )
-        {
-            "Document",
-            "ModelSpaceExtMin",
-            "ModelSpaceExtMax"
-        };
-
-        CopySimpleWritableProperties(
-            sourceDocument.Header,
-            targetDocument.Header,
-            headerExclusions
-        );
-
-        CopySourceVPortSettings(
-            sourceDocument,
-            targetDocument
-        );
-    }
-
-    private static void CopySourceVPortSettings(
-        CadDocument sourceDocument,
-        CadDocument targetDocument
-    )
-    {
-        try
-        {
-            PropertyInfo? vPortsProperty =
-                typeof(CadDocument).GetProperty("VPorts");
-
-            if (vPortsProperty?.GetValue(sourceDocument) is not
-                    System.Collections.IEnumerable sourceVPorts ||
-                vPortsProperty.GetValue(targetDocument) is not
-                    System.Collections.IEnumerable targetVPorts)
-            {
-                return;
-            }
-
-            List<object> targets = targetVPorts
-                .Cast<object>()
+            List<Viewport> viewports = block.Entities
+                .OfType<Viewport>()
                 .ToList();
 
-            foreach (object sourceVPort in sourceVPorts)
+            foreach (Viewport viewport in viewports)
             {
-                string? sourceName = sourceVPort.GetType()
-                    .GetProperty("Name")?
-                    .GetValue(sourceVPort) as string;
-
-                object? targetVPort = targets.FirstOrDefault(item =>
-                    string.Equals(
-                        item.GetType().GetProperty("Name")?
-                            .GetValue(item) as string,
-                        sourceName,
-                        StringComparison.OrdinalIgnoreCase
-                    )
-                );
-
-                if (targetVPort == null)
-                {
-                    continue;
-                }
-
-                CopySimpleWritableProperties(
-                    sourceVPort,
-                    targetVPort,
-                    new HashSet<string>(StringComparer.Ordinal)
-                    {
-                        "Document",
-                        "Handle",
-                        "Name",
-                        "Owner"
-                    }
-                );
-            }
-        }
-        catch
-        {
-            // ACadSharp 버전에 VPorts 노출 방식이 달라도 Header 및
-            // 도형 저장은 계속하고, 해당 버전에서 가능한 설정만 유지한다.
-        }
-    }
-
-    private static void CopySimpleWritableProperties(
-        object source,
-        object target,
-        ISet<string> excludedProperties
-    )
-    {
-        foreach (PropertyInfo sourceProperty in
-            source.GetType().GetProperties(
-                BindingFlags.Instance | BindingFlags.Public
-            ))
-        {
-            if (!sourceProperty.CanRead ||
-                sourceProperty.GetIndexParameters().Length > 0 ||
-                excludedProperties.Contains(sourceProperty.Name))
-            {
-                continue;
-            }
-
-            PropertyInfo? targetProperty = target.GetType().GetProperty(
-                sourceProperty.Name,
-                BindingFlags.Instance | BindingFlags.Public
-            );
-
-            if (targetProperty?.CanWrite != true ||
-                targetProperty.GetIndexParameters().Length > 0 ||
-                targetProperty.PropertyType !=
-                    sourceProperty.PropertyType ||
-                typeof(CadObject).IsAssignableFrom(
-                    sourceProperty.PropertyType
-                ) ||
-                (!sourceProperty.PropertyType.IsValueType &&
-                    sourceProperty.PropertyType != typeof(string)))
-            {
-                continue;
-            }
-
-            try
-            {
-                targetProperty.SetValue(
-                    target,
-                    sourceProperty.GetValue(source)
-                );
-            }
-            catch
-            {
-                // DWG 버전별 읽기 전용에 가까운 값이나 계산 속성은
-                // 건너뛰고 나머지 설정 복사를 계속한다.
+                block.Entities.Remove(viewport);
             }
         }
     }
@@ -5220,40 +5824,6 @@ internal static class Program_V2
 
                 RemoveExtendedDictionaryFromClone(clonedLineType);
                 targetDocument.LineTypes.Add(clonedLineType);
-            }
-        }
-
-        foreach (Layer sourceLayer in sourceDocument.Layers)
-        {
-            Layer copiedLayer;
-
-            if (targetDocument.Layers.TryGetValue(
-                sourceLayer.Name,
-                out Layer targetLayer
-            ))
-            {
-                copiedLayer = targetLayer;
-                CopyScalarTableEntryProperties(
-                    sourceLayer,
-                    copiedLayer
-                );
-            }
-            else
-            {
-                copiedLayer =
-                    (Layer)sourceLayer.Clone();
-
-                RemoveExtendedDictionaryFromClone(copiedLayer);
-                targetDocument.Layers.Add(copiedLayer);
-            }
-
-            if (sourceLayer.LineType != null &&
-                targetDocument.LineTypes.TryGetValue(
-                    sourceLayer.LineType.Name,
-                    out LineType layerLineType
-                ))
-            {
-                copiedLayer.LineType = layerLineType;
             }
         }
 
@@ -5901,8 +6471,7 @@ internal static class Program_V2
             TextEntity or
             MText or
             Dimension or
-            Insert or
-            Viewport;
+            Insert;
     }
 
     /// <summary>

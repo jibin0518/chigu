@@ -2,6 +2,7 @@
 bin/
 obj/
 c_list/
+edit_folder/
 
 # VS Code
 .vscode/
